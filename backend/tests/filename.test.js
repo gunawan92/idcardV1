@@ -25,7 +25,7 @@ assert.equal(normalizePhotoNumber("9693"), "9693");
 assert.equal(normalizePhotoNumber("9693.0"), "9693");
 assert.equal(normalizePhotoNumber("-"), null);
 assert.equal(sanitizeFilename("Allysha Putri / Anwar "), "Allysha Putri - Anwar");
-assert.equal(buildSerialFilename("9693", ".JPG"), "9693.JPG");
-assert.equal(buildSerialFilename("9693", "jpg"), "9693.jpg");
+assert.equal(buildSerialFilename("ALZIN51999", ".JPG"), "ALZIN51999.JPG");
+assert.equal(buildSerialFilename("ALZIN51999", "jpg"), "ALZIN51999.jpg");
 
 console.log("filename tests passed");

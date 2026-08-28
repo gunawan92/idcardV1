@@ -9,8 +9,8 @@ V1 berhenti sampai workflow berikut:
 3. Preview seluruh kolom dari sheet Excel.
 4. Register folder foto kamera lokal.
 5. Matching No Foto Excel dengan filename kamera.
-6. Process foto: remove background, isi background baru dari input hex color.
-7. Output processing berupa JPG RGB rasio 4:3.
+6. Process foto: remove background, lalu pilih Fill warna hex atau No Fill.
+7. Output processing berupa JPG RGB untuk Fill, atau PNG transparan untuk No Fill.
 8. Rename hasil processing ke dua folder output: nama murid dan serial cetak.
 9. QC hasil output cetak: OK, Cek, Tolak.
 10. Buat manifest XLSX.
@@ -91,7 +91,8 @@ C:\xampp\htdocs\SETDEV\production-win\bahan\SD ALZIND 24 8 2026\foto
    - Klik `Process 1 Foto`.
    - Tunggu sampai selesai.
    - Klik lagi untuk foto berikutnya.
-   - Sistem membuat JPG RGB 4:3 di folder `processing`.
+   - Mode `Fill` membuat JPG RGB portrait 3:4 di folder `processing`.
+   - Mode `No Fill` membuat PNG transparan portrait 3:4 di folder `processing`.
    - Kalau semua foto selesai, klik `Buat Output Cetak`.
 
 6. Step `Output Cetak`
@@ -124,8 +125,8 @@ Isi folder session:
 ```text
 import\       file Excel yang diimport
 renamed\      hasil copy + rename dengan nama murid
-serial\       hasil copy + rename dengan serial No Foto untuk cetak
-processing\   hasil process foto JPG RGB 4:3 dengan background baru
+serial\       hasil copy + rename dengan serial/idkartu untuk cetak
+processing\   hasil process foto: JPG RGB untuk Fill, PNG transparan untuk No Fill
 review\       disiapkan untuk tahap berikutnya
 ready\        disiapkan untuk tahap berikutnya
 manifest.xlsx hasil manifest
@@ -136,11 +137,11 @@ Foto original di folder kamera tidak dihapus dan tidak diubah.
 Output cetak V1 sengaja dibuat dua versi setelah processing selesai:
 
 ```text
-renamed\Allysha Putri Anwar.JPG
-serial\9693.JPG
+renamed\Allysha Putri Anwar.jpg
+serial\ALZIN51999.jpg
 ```
 
-Nilai serial berasal dari kolom `No Foto` di XLSX. File di folder `renamed` dan `serial` berasal dari JPG hasil processing, bukan dari RAW original.
+Nilai serial berasal dari kolom `serial` atau `idkartu` di XLSX. `No Foto` hanya dipakai untuk matching foto kamera. File di folder `renamed` dan `serial` berasal dari JPG hasil processing, bukan dari RAW original.
 
 ## Catatan Remove Background
 
@@ -152,9 +153,8 @@ worker\remove_bg.py
 
 Output:
 
-- Format JPG.
-- Mode warna RGB.
-- Background baru sesuai input hex color operator, atau `No Fill` untuk mempertahankan background original.
+- Mode `Fill`: format JPG, warna RGB, background baru sesuai input hex color operator.
+- Mode `No Fill`: format PNG, transparan, tanpa background.
 - Rasio portrait 3:4 untuk frame pasfoto/cetak 4x3.
 - Subject center dengan posisi kepala dan bahu lebih penuh seperti sample pasfoto.
 

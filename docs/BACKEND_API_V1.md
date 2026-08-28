@@ -151,14 +151,24 @@ Payload:
 }
 ```
 
+Untuk No Fill/transparan:
+
+```json
+{
+  "limit": 1,
+  "background_color": "NO_FILL"
+}
+```
+
 Catatan:
 
 - Backend V1 hard cap 1 foto per request.
 - Worker Python memakai `worker\remove_bg.py`.
 - Source processing adalah `source_path` foto RAW/original yang sudah `MATCHED`.
 - Output masuk ke `storage\sessions\{id}\processing`.
-- Output format JPG, mode RGB, rasio 4:3, subject center.
-- Background baru memakai hex color dari operator.
+- Output Fill: JPG, mode RGB, portrait 3:4, subject center.
+- Output No Fill: PNG transparan, mode RGBA, portrait 3:4, subject center.
+- Background Fill memakai hex color dari operator.
 
 ## Rename Output Cetak
 
@@ -177,7 +187,7 @@ Behavior:
 - File hasil processing dicopy ke `storage\sessions\{id}\renamed`.
 - `destination_path` diisi ke DB.
 - File hasil processing juga dicopy ke `storage\sessions\{id}\serial`.
-- `serial_filename` memakai `photo_number` dari XLSX, contoh `9693.JPG`.
+- `serial_filename` memakai kolom `serial` atau `idkartu` dari XLSX, contoh `ALZIN51999.jpg` untuk Fill atau `ALZIN51999.png` untuk No Fill.
 - `serial_path` diisi ke DB.
 - Jika file tujuan sudah ada, backend repair path dan tidak overwrite.
 

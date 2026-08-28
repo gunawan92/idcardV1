@@ -456,8 +456,49 @@ function matchingSummary(items, totalStudents, totalPhotos) {
   };
 }
 
-function processingOutputFilename(finalFilename) {
-  return `${path.basename(String(finalFilename || "output"), path.extname(String(finalFilename || "")))}.jpg`;
+function processingOutputExtension(backgroundColor) {
+  return backgroundColor === "NO_FILL" ? ".png" : ".jpg";
+}
+
+function processingOutputFilename(finalFilename, backgroundColor) {
+  return `${path.basename(String(finalFilename || "output"), path.extname(String(finalFilename || "")))}${processingOutputExtension(backgroundColor)}`;
+}
+
+function hasSupportedProcessingOutput(filePath) {
+  return /\.(jpe?g|png)$/i.test(String(filePath || ""));
+}
+
+function parseRawData(rawData) {
+  try {
+    return JSON.parse(rawData || "{}");
+  } catch (error) {
+    return {};
+  }
+}
+
+function serialValueFromRawData(rawData) {
+  const data = typeof rawData === "string" ? parseRawData(rawData) : rawData || {};
+  const serialKeys = new Set([
+    "serial",
+    "idkartu",
+    "id kartu",
+    "id card",
+    "card id",
+    "serial number",
+    "serial_number",
+  ]);
+
+  for (const [key, value] of Object.entries(data)) {
+    if (serialKeys.has(normalizeHeader(key))) {
+      const text = String(value ?? "").trim();
+
+      if (text && text !== "-") {
+        return text;
+      }
+    }
+  }
+
+  return null;
 }
 
 function normalizeHexColor(value) {
@@ -1537,7 +1578,12 @@ app.post("/api/sessions/:id/process", (req, res) => {
         AND match_status = 'MATCHED'
         AND (
           processing_status IN ('PENDING', 'FAILED')
-          OR (processing_status = 'READY' AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpg')
+          OR (
+            processing_status = 'READY'
+            AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpg'
+            AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpeg'
+            AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.png'
+          )
         )
       ORDER BY import_row_number ASC, id ASC
       LIMIT ?
@@ -1566,7 +1612,7 @@ app.post("/api/sessions/:id/process", (req, res) => {
     `).run(req.params.id);
 
     for (const item of items) {
-      const destinationPath = path.join(storage.processingDir, processingOutputFilename(item.final_filename));
+      const destinationPath = path.join(storage.processingDir, processingOutputFilename(item.final_filename, backgroundColor));
 
       if (item.processing_status === "READY" && fs.existsSync(destinationPath)) {
         summary.skipped += 1;
@@ -1594,7 +1640,12 @@ app.post("/api/sessions/:id/process", (req, res) => {
         AND match_status = 'MATCHED'
         AND (
           processing_status IN ('PENDING', 'FAILED')
-          OR (processing_status = 'READY' AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpg')
+          OR (
+            processing_status = 'READY'
+            AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpg'
+            AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpeg'
+            AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.png'
+          )
         )
     `).get(req.params.id).total;
 
@@ -1660,8 +1711,17 @@ app.get("/api/sessions/:id/processing-items", (req, res) => {
     `).all(req.params.id);
     const summary = db.prepare(`
       SELECT
-        SUM(CASE WHEN processing_status = 'PENDING' OR (processing_status = 'READY' AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpg') THEN 1 ELSE 0 END) AS pending,
-        SUM(CASE WHEN processing_status = 'READY' AND LOWER(COALESCE(processing_path, '')) LIKE '%.jpg' THEN 1 ELSE 0 END) AS ready,
+        SUM(CASE WHEN processing_status = 'PENDING' OR (
+          processing_status = 'READY'
+          AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpg'
+          AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpeg'
+          AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.png'
+        ) THEN 1 ELSE 0 END) AS pending,
+        SUM(CASE WHEN processing_status = 'READY' AND (
+          LOWER(COALESCE(processing_path, '')) LIKE '%.jpg'
+          OR LOWER(COALESCE(processing_path, '')) LIKE '%.jpeg'
+          OR LOWER(COALESCE(processing_path, '')) LIKE '%.png'
+        ) THEN 1 ELSE 0 END) AS ready,
         SUM(CASE WHEN processing_status = 'FAILED' THEN 1 ELSE 0 END) AS failed
       FROM students
       WHERE session_id = ?
@@ -1840,7 +1900,11 @@ app.post("/api/sessions/:id/rename", (req, res) => {
         AND match_status = 'MATCHED'
         AND (
           processing_status != 'READY'
-          OR LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpg'
+          OR (
+            LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpg'
+            AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpeg'
+            AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.png'
+          )
         )
     `).get(req.params.id).total;
 
@@ -1852,7 +1916,7 @@ app.post("/api/sessions/:id/rename", (req, res) => {
     }
 
     const matchedStudents = db.prepare(`
-      SELECT id, photo_number, processing_path, final_filename, rename_status, destination_path, serial_path
+      SELECT id, photo_number, processing_path, final_filename, rename_status, destination_path, serial_path, raw_data
       FROM students
       WHERE session_id = ? AND match_status = 'MATCHED' AND processing_status = 'READY'
       ORDER BY import_row_number ASC, id ASC
@@ -1876,30 +1940,77 @@ app.post("/api/sessions/:id/rename", (req, res) => {
     const results = [];
 
     for (const student of matchedStudents) {
+      const processingExtension = path.extname(student.processing_path || "").toLowerCase();
+
+      if (!hasSupportedProcessingOutput(student.processing_path)) {
+        const fallbackPrintFilename = buildFinalFilename(
+          path.basename(student.final_filename, path.extname(student.final_filename)),
+          student.photo_number,
+          ".jpg",
+          false
+        );
+        const fallbackDestinationPath = path.join(storage.renamedDir, fallbackPrintFilename);
+        const fallbackSerialFilename = buildSerialFilename(serialValueFromRawData(student.raw_data) || "SERIAL_KOSONG", ".jpg");
+        const fallbackSerialPath = path.join(storage.serialDir, fallbackSerialFilename);
+
+        updateRename.run(
+          fallbackPrintFilename,
+          "FAILED",
+          fallbackDestinationPath,
+          fallbackSerialFilename,
+          fallbackSerialPath,
+          "File hasil processing harus JPG/JPEG/PNG.",
+          student.id
+        );
+        summary.failed += 1;
+        results.push({
+          id: student.id,
+          status: "FAILED",
+          destination_path: fallbackDestinationPath,
+          serial_filename: fallbackSerialFilename,
+          serial_path: fallbackSerialPath,
+          message: "File hasil processing harus JPG/JPEG/PNG.",
+        });
+        continue;
+      }
+
       const printFilename = buildFinalFilename(
         path.basename(student.final_filename, path.extname(student.final_filename)),
         student.photo_number,
-        ".jpg",
+        processingExtension,
         false
       );
       const destinationPath = path.join(storage.renamedDir, printFilename);
-      const serialFilename = buildSerialFilename(student.photo_number, ".jpg");
-      const serialPath = path.join(storage.serialDir, serialFilename);
+      const serialValue = serialValueFromRawData(student.raw_data);
 
       try {
+        if (!serialValue) {
+          throw new Error("Serial/idkartu kosong di data XLSX.");
+        }
+
+        const serialFilename = buildSerialFilename(serialValue, processingExtension);
+        const serialPath = path.join(storage.serialDir, serialFilename);
+
+        if (student.serial_path && path.resolve(student.serial_path) !== path.resolve(serialPath)) {
+          safeUnlinkSessionFile(student.serial_path, [storage.serialDir]);
+        }
+
         if (
           student.rename_status === "DONE" &&
           student.destination_path &&
           student.serial_path &&
-          fs.existsSync(student.destination_path) &&
-          fs.existsSync(student.serial_path)
+          path.resolve(student.destination_path) === path.resolve(destinationPath) &&
+          path.resolve(student.serial_path) === path.resolve(serialPath) &&
+          fs.existsSync(destinationPath) &&
+          fs.existsSync(serialPath)
         ) {
           summary.skipped += 1;
           results.push({
             id: student.id,
             status: "SKIPPED_ALREADY_DONE",
-            destination_path: student.destination_path,
-            serial_path: student.serial_path,
+            destination_path: destinationPath,
+            serial_filename: serialFilename,
+            serial_path: serialPath,
           });
           continue;
         }
@@ -1946,14 +2057,17 @@ app.post("/api/sessions/:id/rename", (req, res) => {
           });
         }
       } catch (error) {
-        updateRename.run(printFilename, "FAILED", destinationPath, serialFilename, serialPath, error.message, student.id);
+        const fallbackSerialFilename = buildSerialFilename(serialValue || "SERIAL_KOSONG", processingExtension);
+        const fallbackSerialPath = path.join(storage.serialDir, fallbackSerialFilename);
+
+        updateRename.run(printFilename, "FAILED", destinationPath, fallbackSerialFilename, fallbackSerialPath, error.message, student.id);
         summary.failed += 1;
         results.push({
           id: student.id,
           status: "FAILED",
           destination_path: destinationPath,
-          serial_filename: serialFilename,
-          serial_path: serialPath,
+          serial_filename: fallbackSerialFilename,
+          serial_path: fallbackSerialPath,
           message: error.message,
         });
       }

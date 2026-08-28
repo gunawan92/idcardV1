@@ -232,6 +232,7 @@ export default function App() {
   const [renameLoading, setRenameLoading] = useState(false);
   const [qcLoadingId, setQcLoadingId] = useState<number | null>(null);
   const [processingLoading, setProcessingLoading] = useState(false);
+  const [processingBatchLoading, setProcessingBatchLoading] = useState(false);
   const [processingResetId, setProcessingResetId] = useState<number | null>(null);
   const [activeStep, setActiveStep] = useState<WizardStepId>("session");
   const [message, setMessage] = useState("");
@@ -555,7 +556,7 @@ export default function App() {
 
     const readyCount = processingSummary?.ready || matchSummary?.matched || 0;
     const confirmed = window.confirm(
-      `${readyCount} file hasil processing siap dibuat output cetak.\n\nSistem akan membuat 2 folder: nama murid dan serial No Foto.`
+      `${readyCount} file hasil processing siap dibuat output cetak.\n\nSistem akan membuat 2 folder: nama murid dan serial/idkartu.`
     );
 
     if (!confirmed) {
@@ -672,40 +673,110 @@ export default function App() {
     }
   }
 
-  async function handleRunProcessing() {
+  async function runProcessingOnce() {
     if (!session) {
-      return;
+      throw new Error("Session belum tersedia.");
     }
 
+    const response = await fetch(`${API_URL}/api/sessions/${session.id}/process`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        limit: 1,
+        background_color: backgroundMode === "NO_FILL" ? "NO_FILL" : backgroundColor,
+      }),
+    });
+    const result = await readJson<unknown>(response) as unknown as {
+      success: boolean;
+      summary: ProcessRunSummary;
+      remaining: number;
+    };
+
+    return result;
+  }
+
+  async function handleRunProcessing() {
     try {
       setProcessingLoading(true);
       setMessage("");
 
-      const response = await fetch(`${API_URL}/api/sessions/${session.id}/process`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          limit: 1,
-          background_color: backgroundMode === "NO_FILL" ? "NO_FILL" : backgroundColor,
-        }),
-      });
-      const result = await readJson<unknown>(response) as unknown as {
-        success: boolean;
-        summary: ProcessRunSummary;
-        remaining: number;
-      };
+      const result = await runProcessingOnce();
 
       setProcessRunSummary(result.summary);
-      await loadProcessingItems(session.id);
-      await loadSessions();
+      if (session) {
+        await loadProcessingItems(session.id);
+        await loadSessions();
+      }
       setMessage(`Processing selesai: ${result.summary.processed} ready, ${result.summary.failed} gagal, ${result.remaining} tersisa.`);
     } catch (error) {
       console.error(error);
       setMessage(error instanceof Error ? error.message : "Gagal menjalankan processing");
     } finally {
       setProcessingLoading(false);
+    }
+  }
+
+  async function handleRunProcessingBatch() {
+    if (!session) {
+      return;
+    }
+
+    const totalPending = processingSummary?.pending || 0;
+
+    if (totalPending === 0) {
+      setMessage("Tidak ada foto pending untuk diproses.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Process batch ${totalPending} foto?\n\nSistem tetap memproses 1 foto per request, tunggu selesai, lalu lanjut foto berikutnya.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setProcessingBatchLoading(true);
+      setMessage(`Batch mulai: 0/${totalPending} selesai.`);
+
+      let completed = 0;
+      let remaining = totalPending;
+      let failed = 0;
+
+      while (remaining > 0) {
+        const result = await runProcessingOnce();
+
+        completed += result.summary.processed + result.summary.skipped;
+        failed += result.summary.failed;
+        remaining = result.remaining;
+        setProcessRunSummary(result.summary);
+        await loadProcessingItems(session.id);
+        setMessage(`Batch berjalan: ${completed}/${totalPending} selesai, ${failed} gagal, ${remaining} tersisa.`);
+
+        if (result.summary.failed > 0) {
+          break;
+        }
+
+        if (result.summary.requested === 0) {
+          break;
+        }
+      }
+
+      await loadProcessingItems(session.id);
+      await loadSessions();
+      setMessage(
+        failed > 0
+          ? `Batch berhenti: ${completed}/${totalPending} selesai, ${failed} gagal. Cek item gagal sebelum lanjut.`
+          : `Batch selesai: ${completed}/${totalPending} foto diproses.`
+      );
+    } catch (error) {
+      console.error(error);
+      setMessage(error instanceof Error ? error.message : "Gagal menjalankan batch processing");
+    } finally {
+      setProcessingBatchLoading(false);
     }
   }
 
@@ -1323,9 +1394,9 @@ export default function App() {
                   ))}
                 </div>
 
-                <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 bg-white">
                   <table className="w-full min-w-[1350px] border-collapse text-left text-sm">
-                    <thead className="bg-slate-100 text-xs uppercase text-slate-500">
+                    <thead className="sticky top-0 z-10 bg-slate-100 text-xs uppercase text-slate-500">
                       <tr>
                         <th className="px-4 py-3">No Foto</th>
                         <th className="px-4 py-3">Nama Siswa</th>
@@ -1545,7 +1616,7 @@ export default function App() {
                   <div>
                     <h2 className="text-lg font-semibold">Process Foto</h2>
                     <p className="mt-1 text-sm text-slate-500">
-                      Remove background atau No Fill, lalu simpan JPG RGB portrait 3:4 ke folder processing.
+                      Fill menghasilkan JPG RGB. No Fill menghasilkan PNG transparan. Keduanya portrait 3:4.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-3">
@@ -1553,10 +1624,11 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setBackgroundMode("FILL")}
+                        disabled={processingLoading || processingBatchLoading}
                         className={`px-3 py-2 transition ${
                           backgroundMode === "FILL"
                             ? "bg-slate-950 text-white"
-                            : "text-slate-600 hover:bg-slate-50"
+                            : "text-slate-600 hover:bg-slate-50 disabled:text-slate-300"
                         }`}
                       >
                         Fill
@@ -1564,10 +1636,11 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setBackgroundMode("NO_FILL")}
+                        disabled={processingLoading || processingBatchLoading}
                         className={`border-l border-slate-200 px-3 py-2 transition ${
                           backgroundMode === "NO_FILL"
                             ? "bg-slate-950 text-white"
-                            : "text-slate-600 hover:bg-slate-50"
+                            : "text-slate-600 hover:bg-slate-50 disabled:text-slate-300"
                         }`}
                       >
                         No Fill
@@ -1579,21 +1652,30 @@ export default function App() {
                           type="color"
                           value={backgroundColor}
                           onChange={(event) => setBackgroundColor(event.target.value.toUpperCase())}
+                          disabled={processingLoading || processingBatchLoading}
                           className="h-8 w-10 cursor-pointer border-0 bg-transparent p-0"
                         />
                         <input
                           value={backgroundColor}
                           onChange={(event) => setBackgroundColor(event.target.value.toUpperCase())}
+                          disabled={processingLoading || processingBatchLoading}
                           className="w-24 text-sm font-semibold text-slate-700 outline-none"
                         />
                       </div>
                     )}
                     <button
                       onClick={handleRunProcessing}
-                      disabled={processingLoading || !processingSummary || processingSummary.pending === 0}
+                      disabled={processingLoading || processingBatchLoading || !processingSummary || processingSummary.pending === 0}
                       className="rounded-lg bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
                     >
                       {processingLoading ? "Processing..." : "Process 1 Foto"}
+                    </button>
+                    <button
+                      onClick={handleRunProcessingBatch}
+                      disabled={processingLoading || processingBatchLoading || !processingSummary || processingSummary.pending === 0}
+                      className="rounded-lg bg-red-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
+                    >
+                      {processingBatchLoading ? "Batch Running..." : "Process Batch"}
                     </button>
                   </div>
                 </div>
@@ -1628,7 +1710,7 @@ export default function App() {
                         Semua foto matched sudah selesai processing.
                       </div>
                       <div className="mt-1 text-xs text-emerald-700">
-                        Buat dua folder output cetak: nama murid dan serial No Foto.
+                        Buat dua folder output cetak: nama murid dan serial/idkartu.
                       </div>
                     </div>
                     <button
@@ -1703,7 +1785,7 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => handleResetProcessingItem(item.id)}
-                          disabled={processingResetId === item.id}
+                          disabled={processingLoading || processingBatchLoading || processingResetId === item.id}
                           className="mt-2 h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-wait disabled:bg-slate-100 disabled:text-slate-400"
                         >
                           {processingResetId === item.id ? "Reset..." : "Reset"}

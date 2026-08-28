@@ -71,25 +71,6 @@ def target_4_3_size(width, height):
     return width, int(round(width * 4 / 3))
 
 
-def crop_original_to_4_3(image, image_module):
-    width, height = image.size
-    target_width, target_height = target_4_3_size(width, height)
-    crop_width = min(width, target_width)
-    crop_height = min(height, target_height)
-    left = max(0, (width - crop_width) // 2)
-    top = max(0, (height - crop_height) // 2)
-    cropped = image.crop((left, top, left + crop_width, top + crop_height))
-
-    if cropped.size == (target_width, target_height):
-        return cropped
-
-    canvas = image_module.new("RGB", (target_width, target_height), (255, 255, 255))
-    paste_x = (target_width - cropped.width) // 2
-    paste_y = (target_height - cropped.height) // 2
-    canvas.paste(cropped, (paste_x, paste_y))
-    return canvas
-
-
 def reduce_red_spill(image):
     try:
         import numpy as np
@@ -177,39 +158,37 @@ def process_image_with_background(source_path: str, destination_path: str, backg
         rgb_background = None if no_fill else normalize_hex_color(background_color)
         model_name = "u2net"
 
-        session = None
+        try:
+            session = new_session(model_name)
+        except Exception as exc:
+            if not memory_error_message(exc):
+                raise
 
-        if not no_fill:
+            model_name = "u2netp"
+            session = new_session(model_name)
+
+        with Image.open(source) as image:
+            working_image = resize_for_matting(image.convert("RGBA"), Image, max_side)
             try:
-                session = new_session(model_name)
+                output = remove_background(working_image, remove, session)
             except Exception as exc:
-                if not memory_error_message(exc):
+                if not memory_error_message(exc) or model_name == "u2netp":
                     raise
 
                 model_name = "u2netp"
                 session = new_session(model_name)
+                output = remove_background(working_image, remove, session)
 
-        with Image.open(source) as image:
+            output = reduce_red_spill(output)
+            output = center_on_4_3_canvas(output, Image)
+
             if no_fill:
-                working_image = resize_for_matting(image.convert("RGB"), Image, max_side)
-                output = crop_original_to_4_3(working_image, Image)
+                output.save(destination, "PNG")
             else:
-                working_image = resize_for_matting(image.convert("RGBA"), Image, max_side)
-                try:
-                    output = remove_background(working_image, remove, session)
-                except Exception as exc:
-                    if not memory_error_message(exc) or model_name == "u2netp":
-                        raise
-
-                    model_name = "u2netp"
-                    session = new_session(model_name)
-                    output = remove_background(working_image, remove, session)
-                output = reduce_red_spill(output)
-                output = center_on_4_3_canvas(output, Image)
                 background = Image.new("RGBA", output.size, (*rgb_background, 255))
                 background.alpha_composite(output)
                 output = background.convert("RGB")
-            output.save(destination, "JPEG", quality=95, subsampling=0)
+                output.save(destination, "JPEG", quality=95, subsampling=0)
 
         if not destination.exists():
             return {"success": False, "message": "Output tidak berhasil dibuat."}
@@ -223,6 +202,7 @@ def process_image_with_background(source_path: str, destination_path: str, backg
             "height": output.height,
             "ratio": "3:4",
             "mode": output.mode,
+            "format": "PNG" if no_fill else "JPEG",
             "background_color": "NO_FILL" if no_fill else f"#{background_color.strip().lstrip('#').upper()}",
             "max_side": max_side,
             "model": model_name,
