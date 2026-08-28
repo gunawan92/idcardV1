@@ -9,6 +9,7 @@ const XLSX = require("xlsx");
 const db = require("./db");
 const {
   buildFinalFilename,
+  buildSerialFilename,
   extractPhotoNumber,
   normalizePhotoNumber,
   normalizeStudentName,
@@ -64,7 +65,7 @@ function mappedValue(row, columnIndex) {
 
 function ensureSessionStorage(sessionId) {
   const baseDir = path.join(__dirname, "../storage/sessions", String(sessionId));
-  const dirs = ["import", "renamed", "processing", "review", "ready"];
+  const dirs = ["import", "renamed", "serial", "processing", "review", "ready"];
 
   for (const dir of dirs) {
     fs.mkdirSync(path.join(baseDir, dir), { recursive: true });
@@ -74,6 +75,7 @@ function ensureSessionStorage(sessionId) {
     baseDir,
     importDir: path.join(baseDir, "import"),
     renamedDir: path.join(baseDir, "renamed"),
+    serialDir: path.join(baseDir, "serial"),
     processingDir: path.join(baseDir, "processing"),
   };
 }
@@ -453,14 +455,29 @@ function matchingSummary(items, totalStudents, totalPhotos) {
 }
 
 function processingOutputFilename(finalFilename) {
-  return `${path.basename(String(finalFilename || "output"), path.extname(String(finalFilename || "")))}.png`;
+  return `${path.basename(String(finalFilename || "output"), path.extname(String(finalFilename || "")))}.jpg`;
 }
 
-function runRemoveBackground(sourcePath, destinationPath) {
+function normalizeHexColor(value) {
+  const raw = String(value || "#FFFFFF").trim();
+  const hex = raw.startsWith("#") ? raw : `#${raw}`;
+
+  if (!/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(hex)) {
+    return "#FFFFFF";
+  }
+
+  if (hex.length === 4) {
+    return `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}`.toUpperCase();
+  }
+
+  return hex.toUpperCase();
+}
+
+function runRemoveBackground(sourcePath, destinationPath, backgroundColor) {
   const workerPath = path.join(__dirname, "../worker/remove_bg.py");
   const result = spawnSync(
     "python",
-    [workerPath, "--source", sourcePath, "--destination", destinationPath],
+    [workerPath, "--source", sourcePath, "--destination", destinationPath, "--background", backgroundColor],
     {
       encoding: "utf8",
       windowsHide: true,
@@ -791,6 +808,7 @@ app.get("/api/sessions/:id/students", (req, res) => {
         class_name,
         original_filename,
         final_filename,
+        serial_filename,
         photo_status,
         match_status,
         rename_status,
@@ -798,9 +816,11 @@ app.get("/api/sessions/:id/students", (req, res) => {
         qc_notes,
         processing_status,
         processing_path,
+        processing_background,
         processing_notes,
         source_path,
         destination_path,
+        serial_path,
         is_valid,
         validation_errors,
         raw_data
@@ -1095,6 +1115,8 @@ app.post("/api/sessions/:id/match-photos", (req, res) => {
             final_filename = NULL,
             source_path = NULL,
             destination_path = NULL,
+            serial_filename = NULL,
+            serial_path = NULL,
             notes = validation_errors
         WHERE session_id = ?
       `).run(req.params.id);
@@ -1257,10 +1279,12 @@ app.get("/api/sessions/:id/renamed-items", (req, res) => {
         class_name,
         original_filename,
         final_filename,
+        serial_filename,
         rename_status,
         qc_status,
         qc_notes,
         destination_path,
+        serial_path,
         notes
       FROM students
       WHERE session_id = ?
@@ -1375,7 +1399,7 @@ app.put("/api/sessions/:id/renamed-items/:studentId/qc", (req, res) => {
     }
 
     const item = db.prepare(`
-      SELECT id, photo_number, student_name, final_filename, rename_status, qc_status, qc_notes, destination_path
+      SELECT id, photo_number, student_name, final_filename, serial_filename, rename_status, qc_status, qc_notes, destination_path, serial_path
       FROM students
       WHERE session_id = ? AND id = ?
     `).get(req.params.id, req.params.studentId);
@@ -1464,22 +1488,25 @@ app.post("/api/sessions/:id/process", (req, res) => {
       });
     }
 
-    if (session.status !== "READY_FOR_PROCESSING" && session.status !== "PROCESSING" && session.status !== "REVIEW") {
+    if (!["PHOTO_MATCHED", "PROCESSING", "REVIEW", "READY"].includes(session.status)) {
       return res.status(400).json({
         success: false,
-        message: "Processing hanya boleh setelah QC approved dan READY_FOR_PROCESSING.",
+        message: "Processing hanya boleh setelah matching dijalankan.",
       });
     }
 
     const limit = 1;
+    const backgroundColor = normalizeHexColor(req.body.background_color);
     const storage = ensureSessionStorage(req.params.id);
     const items = db.prepare(`
-      SELECT id, final_filename, destination_path, processing_status
+      SELECT id, final_filename, source_path, processing_status
       FROM students
       WHERE session_id = ?
-        AND rename_status = 'DONE'
-        AND qc_status = 'APPROVED'
-        AND processing_status IN ('PENDING', 'FAILED')
+        AND match_status = 'MATCHED'
+        AND (
+          processing_status IN ('PENDING', 'FAILED')
+          OR (processing_status = 'READY' AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpg')
+        )
       ORDER BY import_row_number ASC, id ASC
       LIMIT ?
     `).all(req.params.id, limit);
@@ -1487,6 +1514,7 @@ app.post("/api/sessions/:id/process", (req, res) => {
       UPDATE students
       SET processing_status = ?,
           processing_path = ?,
+          processing_background = ?,
           processing_notes = ?
       WHERE id = ?
     `);
@@ -1514,14 +1542,14 @@ app.post("/api/sessions/:id/process", (req, res) => {
         continue;
       }
 
-      const workerResult = runRemoveBackground(item.destination_path, destinationPath);
+      const workerResult = runRemoveBackground(item.source_path, destinationPath, backgroundColor);
 
       if (workerResult.success) {
-        updateProcessing.run("READY", destinationPath, null, item.id);
+        updateProcessing.run("READY", destinationPath, backgroundColor, null, item.id);
         summary.processed += 1;
-        results.push({ id: item.id, status: "READY", processing_path: destinationPath });
+        results.push({ id: item.id, status: "READY", processing_path: destinationPath, background_color: backgroundColor });
       } else {
-        updateProcessing.run("FAILED", destinationPath, workerResult.message, item.id);
+        updateProcessing.run("FAILED", destinationPath, backgroundColor, workerResult.message, item.id);
         summary.failed += 1;
         results.push({ id: item.id, status: "FAILED", processing_path: destinationPath, message: workerResult.message });
       }
@@ -1531,9 +1559,11 @@ app.post("/api/sessions/:id/process", (req, res) => {
       SELECT COUNT(*) AS total
       FROM students
       WHERE session_id = ?
-        AND rename_status = 'DONE'
-        AND qc_status = 'APPROVED'
-        AND processing_status IN ('PENDING', 'FAILED')
+        AND match_status = 'MATCHED'
+        AND (
+          processing_status IN ('PENDING', 'FAILED')
+          OR (processing_status = 'READY' AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpg')
+        )
     `).get(req.params.id).total;
 
     db.prepare(`
@@ -1586,24 +1616,24 @@ app.get("/api/sessions/:id/processing-items", (req, res) => {
         class_name,
         final_filename,
         destination_path,
+        source_path,
         processing_status,
         processing_path,
+        processing_background,
         processing_notes
       FROM students
       WHERE session_id = ?
-        AND rename_status = 'DONE'
-        AND qc_status = 'APPROVED'
+        AND match_status = 'MATCHED'
       ORDER BY import_row_number ASC, id ASC
     `).all(req.params.id);
     const summary = db.prepare(`
       SELECT
-        SUM(CASE WHEN processing_status = 'PENDING' THEN 1 ELSE 0 END) AS pending,
-        SUM(CASE WHEN processing_status = 'READY' THEN 1 ELSE 0 END) AS ready,
+        SUM(CASE WHEN processing_status = 'PENDING' OR (processing_status = 'READY' AND LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpg') THEN 1 ELSE 0 END) AS pending,
+        SUM(CASE WHEN processing_status = 'READY' AND LOWER(COALESCE(processing_path, '')) LIKE '%.jpg' THEN 1 ELSE 0 END) AS ready,
         SUM(CASE WHEN processing_status = 'FAILED' THEN 1 ELSE 0 END) AS failed
       FROM students
       WHERE session_id = ?
-        AND rename_status = 'DONE'
-        AND qc_status = 'APPROVED'
+        AND match_status = 'MATCHED'
     `).get(req.params.id);
 
     res.json({
@@ -1677,24 +1707,45 @@ app.post("/api/sessions/:id/rename", (req, res) => {
       });
     }
 
-    if (session.status !== "PHOTO_MATCHED" && session.status !== "REVIEW" && session.status !== "RENAMED") {
+    if (!["READY", "REVIEW", "RENAMED"].includes(session.status)) {
       return res.status(400).json({
         success: false,
-        message: "Rename hanya boleh setelah matching dijalankan.",
+        message: "Rename hanya boleh setelah semua foto selesai processing.",
       });
     }
 
     const storage = ensureSessionStorage(req.params.id);
-    const matchedStudents = db.prepare(`
-      SELECT id, source_path, final_filename, rename_status, destination_path
+    const blocking = db.prepare(`
+      SELECT COUNT(*) AS total
       FROM students
-      WHERE session_id = ? AND match_status = 'MATCHED'
+      WHERE session_id = ?
+        AND match_status = 'MATCHED'
+        AND (
+          processing_status != 'READY'
+          OR LOWER(COALESCE(processing_path, '')) NOT LIKE '%.jpg'
+        )
+    `).get(req.params.id).total;
+
+    if (blocking > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `${blocking} foto matched belum selesai processing.`,
+      });
+    }
+
+    const matchedStudents = db.prepare(`
+      SELECT id, photo_number, processing_path, final_filename, rename_status, destination_path, serial_path
+      FROM students
+      WHERE session_id = ? AND match_status = 'MATCHED' AND processing_status = 'READY'
       ORDER BY import_row_number ASC, id ASC
     `).all(req.params.id);
     const updateRename = db.prepare(`
       UPDATE students
-      SET rename_status = ?,
+      SET final_filename = ?,
+          rename_status = ?,
           destination_path = ?,
+          serial_filename = ?,
+          serial_path = ?,
           notes = ?
       WHERE id = ?
     `);
@@ -1707,39 +1758,86 @@ app.post("/api/sessions/:id/rename", (req, res) => {
     const results = [];
 
     for (const student of matchedStudents) {
-      const destinationPath = path.join(storage.renamedDir, student.final_filename);
+      const printFilename = buildFinalFilename(
+        path.basename(student.final_filename, path.extname(student.final_filename)),
+        student.photo_number,
+        ".jpg",
+        false
+      );
+      const destinationPath = path.join(storage.renamedDir, printFilename);
+      const serialFilename = buildSerialFilename(student.photo_number, ".jpg");
+      const serialPath = path.join(storage.serialDir, serialFilename);
 
       try {
-        if (student.rename_status === "DONE" && student.destination_path && fs.existsSync(student.destination_path)) {
+        if (
+          student.rename_status === "DONE" &&
+          student.destination_path &&
+          student.serial_path &&
+          fs.existsSync(student.destination_path) &&
+          fs.existsSync(student.serial_path)
+        ) {
           summary.skipped += 1;
-          results.push({ id: student.id, status: "SKIPPED_ALREADY_DONE", destination_path: student.destination_path });
+          results.push({
+            id: student.id,
+            status: "SKIPPED_ALREADY_DONE",
+            destination_path: student.destination_path,
+            serial_path: student.serial_path,
+          });
           continue;
         }
 
-        if (!fs.existsSync(student.source_path)) {
-          throw new Error("Source file tidak ditemukan.");
+        if (!student.processing_path || !fs.existsSync(student.processing_path)) {
+          throw new Error("File hasil processing tidak ditemukan.");
         }
 
-        if (fs.existsSync(destinationPath)) {
-          updateRename.run("DONE", destinationPath, null, student.id);
-          summary.skipped += 1;
-          results.push({ id: student.id, status: "REPAIRED_EXISTING_DESTINATION", destination_path: destinationPath });
-          continue;
-        }
-
-        fs.copyFileSync(student.source_path, destinationPath);
+        let copied = false;
 
         if (!fs.existsSync(destinationPath)) {
+          fs.copyFileSync(student.processing_path, destinationPath);
+          copied = true;
+        }
+
+        if (!fs.existsSync(serialPath)) {
+          fs.copyFileSync(student.processing_path, serialPath);
+          copied = true;
+        }
+
+        if (!fs.existsSync(destinationPath) || !fs.existsSync(serialPath)) {
           throw new Error("Copy gagal diverifikasi.");
         }
 
-        updateRename.run("DONE", destinationPath, null, student.id);
-        summary.renamed += 1;
-        results.push({ id: student.id, status: "DONE", destination_path: destinationPath });
+        updateRename.run(printFilename, "DONE", destinationPath, serialFilename, serialPath, null, student.id);
+
+        if (copied) {
+          summary.renamed += 1;
+          results.push({
+            id: student.id,
+            status: "DONE",
+            destination_path: destinationPath,
+            serial_filename: serialFilename,
+            serial_path: serialPath,
+          });
+        } else {
+          summary.skipped += 1;
+          results.push({
+            id: student.id,
+            status: "REPAIRED_EXISTING_DESTINATION",
+            destination_path: destinationPath,
+            serial_filename: serialFilename,
+            serial_path: serialPath,
+          });
+        }
       } catch (error) {
-        updateRename.run("FAILED", destinationPath, error.message, student.id);
+        updateRename.run(printFilename, "FAILED", destinationPath, serialFilename, serialPath, error.message, student.id);
         summary.failed += 1;
-        results.push({ id: student.id, status: "FAILED", destination_path: destinationPath, message: error.message });
+        results.push({
+          id: student.id,
+          status: "FAILED",
+          destination_path: destinationPath,
+          serial_filename: serialFilename,
+          serial_path: serialPath,
+          message: error.message,
+        });
       }
     }
 
@@ -1793,6 +1891,7 @@ app.post("/api/sessions/:id/manifest", (req, res) => {
         class_name,
         original_filename,
         final_filename,
+        serial_filename,
         match_status,
         rename_status,
         qc_status,
@@ -1802,6 +1901,7 @@ app.post("/api/sessions/:id/manifest", (req, res) => {
         processing_notes,
         source_path,
         destination_path,
+        serial_path,
         notes,
         raw_data
       FROM students
@@ -1822,15 +1922,18 @@ app.post("/api/sessions/:id/manifest", (req, res) => {
         class_name: student.class_name || "",
         original_filename: student.original_filename || "",
         final_filename: student.final_filename || "",
+        serial_filename: student.serial_filename || "",
         match_status: student.match_status || "",
         rename_status: student.rename_status || "",
         qc_status: student.qc_status || "",
         qc_notes: student.qc_notes || "",
         processing_status: student.processing_status || "",
         processing_path: student.processing_path || "",
+        processing_background: student.processing_background || "",
         processing_notes: student.processing_notes || "",
         source_path: student.source_path || "",
         destination_path: student.destination_path || "",
+        serial_path: student.serial_path || "",
         notes: student.notes || "",
       };
     });

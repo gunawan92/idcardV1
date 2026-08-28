@@ -134,7 +134,33 @@ IMG_9693.JPG -> 9693
 DSC_1001.JPG -> 1001
 ```
 
-## Rename
+## Background Removal / Processing
+
+```http
+POST /api/sessions/:id/process
+GET  /api/sessions/:id/processing-items
+GET  /api/sessions/:id/processing-items/:studentId/image
+```
+
+Payload:
+
+```json
+{
+  "limit": 1,
+  "background_color": "#FFFFFF"
+}
+```
+
+Catatan:
+
+- Backend V1 hard cap 1 foto per request.
+- Worker Python memakai `worker\remove_bg.py`.
+- Source processing adalah `source_path` foto RAW/original yang sudah `MATCHED`.
+- Output masuk ke `storage\sessions\{id}\processing`.
+- Output format JPG, mode RGB, rasio 4:3, subject center.
+- Background baru memakai hex color dari operator.
+
+## Rename Output Cetak
 
 ```http
 POST /api/sessions/:id/rename
@@ -142,14 +168,17 @@ POST /api/sessions/:id/rename
 
 Syarat:
 
-- Session sudah `PHOTO_MATCHED`, `REVIEW`, atau `RENAMED`.
-- Hanya item `MATCHED` yang dicopy.
+- Semua item `MATCHED` sudah `processing_status = READY`.
+- Rename mengambil source dari `processing_path`, bukan dari RAW original.
 
 Behavior:
 
 - Original file tidak diubah.
-- File dicopy ke `storage\sessions\{id}\renamed`.
+- File hasil processing dicopy ke `storage\sessions\{id}\renamed`.
 - `destination_path` diisi ke DB.
+- File hasil processing juga dicopy ke `storage\sessions\{id}\serial`.
+- `serial_filename` memakai `photo_number` dari XLSX, contoh `9693.JPG`.
+- `serial_path` diisi ke DB.
 - Jika file tujuan sudah ada, backend repair path dan tidak overwrite.
 
 ## QC Rename
@@ -178,40 +207,6 @@ NEEDS_REVIEW
 REJECTED
 ```
 
-## Ready For Processing
-
-```http
-POST /api/sessions/:id/ready-for-processing
-```
-
-Syarat:
-
-- Semua hasil rename yang `DONE` harus `APPROVED`.
-- Kalau masih ada `PENDING`, `NEEDS_REVIEW`, atau `REJECTED`, backend menolak request.
-
-## Background Removal
-
-```http
-POST /api/sessions/:id/process
-GET  /api/sessions/:id/processing-items
-GET  /api/sessions/:id/processing-items/:studentId/image
-```
-
-Payload:
-
-```json
-{
-  "limit": 1
-}
-```
-
-Catatan:
-
-- Backend V1 hard cap 1 foto per request.
-- Worker Python memakai `worker\remove_bg.py`.
-- Output PNG masuk ke `storage\sessions\{id}\processing`.
-- Output rasio 4:3 dan subject center.
-
 ## Manifest
 
 ```http
@@ -225,4 +220,3 @@ storage\sessions\{id}\manifest.xlsx
 ```
 
 Manifest berisi kolom Excel asli plus field workflow seperti match, rename, QC, processing, source path, dan destination path.
-

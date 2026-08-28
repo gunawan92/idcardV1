@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const {
   extractPhotoNumber,
+  buildSerialFilename,
   normalizePhotoNumber,
   sanitizeFilename,
 } = require("../services/filename.service");
@@ -24,5 +25,7 @@ assert.equal(normalizePhotoNumber("9693"), "9693");
 assert.equal(normalizePhotoNumber("9693.0"), "9693");
 assert.equal(normalizePhotoNumber("-"), null);
 assert.equal(sanitizeFilename("Allysha Putri / Anwar "), "Allysha Putri - Anwar");
+assert.equal(buildSerialFilename("9693", ".JPG"), "9693.JPG");
+assert.equal(buildSerialFilename("9693", "jpg"), "9693.jpg");
 
 console.log("filename tests passed");

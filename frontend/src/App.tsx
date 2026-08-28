@@ -32,11 +32,13 @@ type Student = {
   class_name: string | null;
   original_filename: string | null;
   final_filename: string | null;
+  serial_filename: string | null;
   photo_status: string;
   match_status: MatchStatus;
   rename_status: "PENDING" | "DONE" | "FAILED";
   source_path: string | null;
   destination_path: string | null;
+  serial_path: string | null;
   is_valid: 0 | 1;
   validation_errors: string | null;
   raw_data: Record<string, string>;
@@ -105,10 +107,12 @@ type RenamedItem = {
   class_name: string | null;
   original_filename: string | null;
   final_filename: string | null;
+  serial_filename: string | null;
   rename_status: "DONE" | "FAILED";
   qc_status: QcStatus;
   qc_notes: string | null;
   destination_path: string | null;
+  serial_path: string | null;
   notes: string | null;
 };
 
@@ -135,6 +139,7 @@ type ProcessingItem = {
   destination_path: string | null;
   processing_status: "PENDING" | "READY" | "FAILED";
   processing_path: string | null;
+  processing_background: string | null;
   processing_notes: string | null;
 };
 
@@ -168,8 +173,8 @@ const WIZARD_STEPS: Array<{
   { id: "students", label: "Data Siswa", description: "Preview Excel" },
   { id: "photos", label: "Foto RAW", description: "Scan folder kamera" },
   { id: "matching", label: "Matching", description: "Cek pasangan foto" },
-  { id: "qc", label: "QC Rename", description: "Approve output" },
-  { id: "processing", label: "Remove BG", description: "Proses 1 foto" },
+  { id: "processing", label: "Process Foto", description: "Remove BG + warna" },
+  { id: "qc", label: "Output Cetak", description: "Rename final + QC" },
 ];
 
 function stepFromSessionStatus(status?: string): WizardStepId {
@@ -181,16 +186,12 @@ function stepFromSessionStatus(status?: string): WizardStepId {
     return "students";
   }
 
-  if (status === "PHOTO_MATCHED") {
-    return "matching";
+  if (status === "PHOTO_MATCHED" || status === "PROCESSING" || status === "READY") {
+    return "processing";
   }
 
   if (status === "RENAMED" || status === "REVIEW") {
     return "qc";
-  }
-
-  if (status === "READY_FOR_PROCESSING" || status === "PROCESSING" || status === "READY") {
-    return "processing";
   }
 
   return "session";
@@ -221,13 +222,13 @@ export default function App() {
   const [processingSummary, setProcessingSummary] = useState<ProcessingSummary | null>(null);
   const [processingItems, setProcessingItems] = useState<ProcessingItem[]>([]);
   const [processRunSummary, setProcessRunSummary] = useState<ProcessRunSummary | null>(null);
+  const [backgroundColor, setBackgroundColor] = useState("#FFFFFF");
   const [loading, setLoading] = useState(false);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [photoLoading, setPhotoLoading] = useState(false);
   const [matchLoading, setMatchLoading] = useState(false);
   const [renameLoading, setRenameLoading] = useState(false);
   const [qcLoadingId, setQcLoadingId] = useState<number | null>(null);
-  const [readyLoading, setReadyLoading] = useState(false);
   const [processingLoading, setProcessingLoading] = useState(false);
   const [activeStep, setActiveStep] = useState<WizardStepId>("session");
   const [message, setMessage] = useState("");
@@ -369,7 +370,7 @@ export default function App() {
         });
       }
 
-      if (["PHOTO_MATCHED", "RENAMED", "REVIEW", "READY_FOR_PROCESSING"].includes(selectedSession.status)) {
+      if (["PHOTO_MATCHED", "PROCESSING", "READY", "RENAMED", "REVIEW", "READY_FOR_PROCESSING"].includes(selectedSession.status)) {
         const matchingResponse = await fetch(`${API_URL}/api/sessions/${sessionId}/matching`);
         const matchingResult = await readJson<unknown>(matchingResponse) as unknown as {
           summary: MatchSummary;
@@ -384,7 +385,7 @@ export default function App() {
         await loadRenamedItems(sessionId);
       }
 
-      if (["READY_FOR_PROCESSING", "PROCESSING", "READY"].includes(selectedSession.status)) {
+      if (["PHOTO_MATCHED", "PROCESSING", "READY", "READY_FOR_PROCESSING"].includes(selectedSession.status)) {
         await loadProcessingItems(sessionId);
       }
     } catch (error) {
@@ -532,7 +533,8 @@ export default function App() {
       setMatchSummary(result.summary);
       setMatchItems(result.items);
       setSession({ ...session, status: "PHOTO_MATCHED" });
-      setActiveStep("matching");
+      await loadProcessingItems(session.id);
+      setActiveStep("processing");
       setMessage(`Matching selesai: ${result.summary.matched} foto cocok.`);
     } catch (error) {
       console.error(error);
@@ -543,13 +545,14 @@ export default function App() {
   }
 
   async function handleRename() {
-    if (!session || !matchSummary) {
-      setMessage("Matching harus dijalankan dulu.");
+    if (!session) {
+      setMessage("Session belum tersedia.");
       return;
     }
 
+    const readyCount = processingSummary?.ready || matchSummary?.matched || 0;
     const confirmed = window.confirm(
-      `${matchSummary.matched} file siap diproses.\n\nFile original tidak akan diubah.\nSistem akan membuat copy dengan nama siswa.`
+      `${readyCount} file hasil processing siap dibuat output cetak.\n\nSistem akan membuat 2 folder: nama murid dan serial No Foto.`
     );
 
     if (!confirmed) {
@@ -666,33 +669,6 @@ export default function App() {
     }
   }
 
-  async function handleReadyForProcessing() {
-    if (!session) {
-      return;
-    }
-
-    try {
-      setReadyLoading(true);
-      setMessage("");
-
-      const response = await fetch(`${API_URL}/api/sessions/${session.id}/ready-for-processing`, {
-        method: "POST",
-      });
-      const result = await readJson<Session>(response);
-
-      setSession(result.data);
-      await loadSessions();
-      await loadProcessingItems(session.id);
-      setActiveStep("processing");
-      setMessage("Session siap masuk tahap processing.");
-    } catch (error) {
-      console.error(error);
-      setMessage(error instanceof Error ? error.message : "Gagal menandai ready for processing");
-    } finally {
-      setReadyLoading(false);
-    }
-  }
-
   async function handleRunProcessing() {
     if (!session) {
       return;
@@ -709,6 +685,7 @@ export default function App() {
         },
         body: JSON.stringify({
           limit: 1,
+          background_color: backgroundColor,
         }),
       });
       const result = await readJson<unknown>(response) as unknown as {
@@ -746,7 +723,7 @@ export default function App() {
     if (stepId === "photos") return Boolean(summary || students.length > 0);
     if (stepId === "matching") return Boolean(photoSummary || matchSummary);
     if (stepId === "qc") return renamedItems.length > 0 || ["RENAMED", "REVIEW", "READY_FOR_PROCESSING"].includes(session?.status || "");
-    if (stepId === "processing") return Boolean(processingSummary) || ["READY_FOR_PROCESSING", "PROCESSING", "READY"].includes(session?.status || "");
+    if (stepId === "processing") return Boolean(processingSummary) || ["PHOTO_MATCHED", "PROCESSING", "READY"].includes(session?.status || "");
     return false;
   };
   const goNextStep = () => {
@@ -824,7 +801,7 @@ export default function App() {
 
           <div className="mt-8 border-t border-white/10 pt-5">
             <div className="mb-3 px-2 text-xs font-semibold uppercase text-slate-500">
-              Sessions
+              History / riwayat
             </div>
             <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
               {sessions.map((item) => (
@@ -848,7 +825,7 @@ export default function App() {
               ))}
               {sessions.length === 0 && (
                 <div className="px-2 text-xs text-slate-500">
-                  Belum ada session.
+                  Belum ada Riwayat.
                 </div>
               )}
             </div>
@@ -1247,15 +1224,15 @@ export default function App() {
 
                     <div className="mt-5 flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-4">
                       <div>
-                        <div className="text-sm font-semibold">{matchSummary.matched} file siap dicopy dan direname</div>
-                        <div className="mt-1 text-xs text-slate-500">Original foto tidak akan diubah.</div>
+                        <div className="text-sm font-semibold">{matchSummary.matched} file siap masuk processing</div>
+                        <div className="mt-1 text-xs text-slate-500">Rename final dibuat setelah background selesai diproses.</div>
                       </div>
                       <button
-                        onClick={handleRename}
-                        disabled={renameLoading || matchSummary.matched === 0}
+                        onClick={() => setActiveStep("processing")}
+                        disabled={matchSummary.matched === 0}
                         className="rounded-xl bg-slate-950 px-6 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
                       >
-                        {renameLoading ? "Processing..." : `Copy & Rename ${matchSummary.matched} File`}
+                        Lanjut Process Foto
                       </button>
                     </div>
 
@@ -1269,7 +1246,7 @@ export default function App() {
               </section>
             )}
 
-            {session && activeStep === "qc" && ["PHOTO_MATCHED", "RENAMED", "REVIEW", "READY_FOR_PROCESSING"].includes(session.status) && (
+            {session && activeStep === "qc" && ["RENAMED", "REVIEW"].includes(session.status) && (
               <section className="mt-8 border-t border-slate-200 pt-8">
                 <div className="mb-5 flex items-end justify-between gap-4">
                   <div>
@@ -1308,15 +1285,17 @@ export default function App() {
                 </div>
 
                 <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-                  <table className="w-full min-w-[1100px] border-collapse text-left text-sm">
+                  <table className="w-full min-w-[1350px] border-collapse text-left text-sm">
                     <thead className="bg-slate-100 text-xs uppercase text-slate-500">
                       <tr>
                         <th className="px-4 py-3">No Foto</th>
                         <th className="px-4 py-3">Nama Siswa</th>
                         <th className="px-4 py-3">File Kamera</th>
-                        <th className="px-4 py-3">Nama Output</th>
+                        <th className="px-4 py-3">Output Nama Murid</th>
+                        <th className="px-4 py-3">Output Serial</th>
                         <th className="px-4 py-3">Rename</th>
-                        <th className="px-4 py-3">Destination</th>
+                        <th className="px-4 py-3">Folder Nama</th>
+                        <th className="px-4 py-3">Folder Serial</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200">
@@ -1326,6 +1305,7 @@ export default function App() {
                           <td className="px-4 py-3">{student.student_name || "-"}</td>
                           <td className="px-4 py-3">{student.original_filename || "-"}</td>
                           <td className="px-4 py-3">{student.final_filename || "-"}</td>
+                          <td className="px-4 py-3">{student.serial_filename || "-"}</td>
                           <td className="px-4 py-3">
                             <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
                               {student.rename_status}
@@ -1333,6 +1313,9 @@ export default function App() {
                           </td>
                           <td className="max-w-[520px] truncate px-4 py-3 text-slate-500">
                             {student.destination_path || "-"}
+                          </td>
+                          <td className="max-w-[520px] truncate px-4 py-3 text-slate-500">
+                            {student.serial_path || "-"}
                           </td>
                         </tr>
                       ))}
@@ -1364,20 +1347,6 @@ export default function App() {
                       className="rounded-xl bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                     >
                       Approve Pending
-                    </button>
-                    <button
-                      onClick={handleReadyForProcessing}
-                      disabled={
-                        readyLoading ||
-                        !qcSummary ||
-                        qcSummary.done === 0 ||
-                        qcSummary.pending > 0 ||
-                        qcSummary.needs_review > 0 ||
-                        qcSummary.rejected > 0
-                      }
-                      className="rounded-xl bg-red-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
-                    >
-                      {readyLoading ? "Updating..." : "Ready for Processing"}
                     </button>
                   </div>
                 </div>
@@ -1482,6 +1451,10 @@ export default function App() {
                           {item.final_filename || "-"}
                         </div>
 
+                        <div className="truncate rounded-md bg-red-50 px-2 py-1.5 text-[11px] font-semibold text-red-700">
+                          Serial: {item.serial_filename || "-"}
+                        </div>
+
                         <div className="grid grid-cols-3 overflow-hidden rounded-md border border-slate-200 bg-white">
                           <button
                             type="button"
@@ -1527,22 +1500,37 @@ export default function App() {
               </section>
             )}
 
-            {session && activeStep === "processing" && ["READY_FOR_PROCESSING", "PROCESSING", "READY"].includes(session.status) && (
+            {session && activeStep === "processing" && ["PHOTO_MATCHED", "PROCESSING", "READY"].includes(session.status) && (
               <section className="mt-8 border-t border-slate-200 pt-8">
                 <div className="mb-5 flex items-end justify-between gap-4">
                   <div>
-                    <h2 className="text-lg font-semibold">Background Removal</h2>
+                    <h2 className="text-lg font-semibold">Process Foto</h2>
                     <p className="mt-1 text-sm text-slate-500">
-                      Proses lokal memakai Python worker, satu foto per klik. Output PNG masuk ke folder processing.
+                      Remove background, isi warna background baru, lalu simpan JPG RGB 4:3 ke folder processing.
                     </p>
                   </div>
-                  <button
-                    onClick={handleRunProcessing}
-                    disabled={processingLoading || !processingSummary || processingSummary.pending === 0}
-                    className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
-                  >
-                    {processingLoading ? "Processing..." : "Process 1 Foto"}
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+                      <input
+                        type="color"
+                        value={backgroundColor}
+                        onChange={(event) => setBackgroundColor(event.target.value.toUpperCase())}
+                        className="h-8 w-10 cursor-pointer border-0 bg-transparent p-0"
+                      />
+                      <input
+                        value={backgroundColor}
+                        onChange={(event) => setBackgroundColor(event.target.value.toUpperCase())}
+                        className="w-24 text-sm font-semibold text-slate-700 outline-none"
+                      />
+                    </div>
+                    <button
+                      onClick={handleRunProcessing}
+                      disabled={processingLoading || !processingSummary || processingSummary.pending === 0}
+                      className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
+                    >
+                      {processingLoading ? "Processing..." : "Process 1 Foto"}
+                    </button>
+                  </div>
                 </div>
 
                 {processingSummary && (
@@ -1565,6 +1553,26 @@ export default function App() {
                 {processRunSummary && (
                   <div className="mb-5 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm">
                     Batch terakhir: {processRunSummary.processed} ready, {processRunSummary.failed} gagal, {processRunSummary.skipped} dilewati.
+                  </div>
+                )}
+
+                {processingSummary && processingSummary.ready > 0 && processingSummary.pending === 0 && processingSummary.failed === 0 && (
+                  <div className="mb-5 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4">
+                    <div>
+                      <div className="text-sm font-semibold text-emerald-900">
+                        Semua foto matched sudah selesai processing.
+                      </div>
+                      <div className="mt-1 text-xs text-emerald-700">
+                        Buat dua folder output cetak: nama murid dan serial No Foto.
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleRename}
+                      disabled={renameLoading}
+                      className="rounded-xl bg-red-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
+                    >
+                      {renameLoading ? "Membuat Output..." : "Buat Output Cetak"}
+                    </button>
                   </div>
                 )}
 
@@ -1605,6 +1613,13 @@ export default function App() {
                         </div>
                         <div className="truncate rounded-md bg-slate-50 px-2 py-1.5 text-[11px] text-slate-600">
                           {item.processing_path || item.final_filename || "-"}
+                        </div>
+                        <div className="flex items-center gap-2 text-[11px] text-slate-500">
+                          <span
+                            className="h-4 w-4 rounded border border-slate-200"
+                            style={{ backgroundColor: item.processing_background || backgroundColor }}
+                          />
+                          <span>{item.processing_background || backgroundColor}</span>
                         </div>
                         {item.processing_notes && (
                           <div className="text-[11px] text-red-600">

@@ -9,10 +9,10 @@ V1 berhenti sampai workflow berikut:
 3. Preview seluruh kolom dari sheet Excel.
 4. Register folder foto kamera lokal.
 5. Matching No Foto Excel dengan filename kamera.
-6. Copy + rename foto ke folder session.
-7. QC hasil rename: OK, Cek, Tolak.
-8. Background removal lokal via Python, 1 foto per klik.
-9. Output remove background PNG rasio 4:3 dengan subject center.
+6. Process foto: remove background, isi background baru dari input hex color.
+7. Output processing berupa JPG RGB rasio 4:3.
+8. Rename hasil processing ke dua folder output: nama murid dan serial cetak.
+9. QC hasil output cetak: OK, Cek, Tolak.
 10. Buat manifest XLSX.
 
 V1 belum masuk approval production final, crop advanced, auto alignment detail, ready-to-print packaging final, atau agent integration.
@@ -75,21 +75,22 @@ C:\xampp\htdocs\SETDEV\production-win\bahan\SD ALZIND 24 8 2026\foto
      - `DATA_NOT_FOUND`: foto ada, data siswa tidak ada.
      - `DUPLICATE_NUMBER`: No Foto duplicate.
      - `FILENAME_CONFLICT`: nama output bentrok.
-   - Kalau aman, klik `Copy & Rename`.
+   - Kalau aman, lanjut ke step `Process Foto`.
 
-5. Step `QC Rename`
-   - Cek thumbnail hasil rename.
+5. Step `Process Foto`
+   - Pilih warna background memakai color picker atau input hex, contoh `#FFFFFF`.
+   - Klik `Process 1 Foto`.
+   - Tunggu sampai selesai.
+   - Klik lagi untuk foto berikutnya.
+   - Sistem membuat JPG RGB 4:3 di folder `processing`.
+   - Kalau semua foto selesai, klik `Buat Output Cetak`.
+
+6. Step `Output Cetak`
+   - Cek thumbnail hasil rename final.
    - Klik:
      - `OK`: foto disetujui.
      - `Cek`: perlu review ulang.
      - `Tolak`: tidak lolos.
-   - Jika semua sudah OK, klik `Ready for Processing`.
-
-6. Step `Remove BG`
-   - Klik `Process 1 Foto`.
-   - Tunggu sampai selesai.
-   - Klik lagi untuk foto berikutnya.
-   - Jangan proses batch besar di laptop RAM terbatas.
 
 7. Manifest
    - Dari area hasil rename, klik `Buat Manifest`.
@@ -113,14 +114,24 @@ Isi folder session:
 
 ```text
 import\       file Excel yang diimport
-renamed\      hasil copy + rename dari foto original
-processing\   hasil remove background PNG 4:3
+renamed\      hasil copy + rename dengan nama murid
+serial\       hasil copy + rename dengan serial No Foto untuk cetak
+processing\   hasil process foto JPG RGB 4:3 dengan background baru
 review\       disiapkan untuk tahap berikutnya
 ready\        disiapkan untuk tahap berikutnya
 manifest.xlsx hasil manifest
 ```
 
 Foto original di folder kamera tidak dihapus dan tidak diubah.
+
+Output cetak V1 sengaja dibuat dua versi setelah processing selesai:
+
+```text
+renamed\Allysha Putri Anwar.JPG
+serial\9693.JPG
+```
+
+Nilai serial berasal dari kolom `No Foto` di XLSX. File di folder `renamed` dan `serial` berasal dari JPG hasil processing, bukan dari RAW original.
 
 ## Catatan Remove Background
 
@@ -132,8 +143,9 @@ worker\remove_bg.py
 
 Output:
 
-- Format PNG.
-- Background transparan.
+- Format JPG.
+- Mode warna RGB.
+- Background baru sesuai input hex color operator.
 - Rasio 4:3.
 - Subject center.
 
@@ -144,4 +156,3 @@ Karena proses ini berat, V1 sengaja dibuat 1 foto per klik untuk menghindari out
 ## Stop Aplikasi
 
 Tutup dua terminal yang dibuka `START_V1.bat`, atau tekan `Ctrl+C` di masing-masing terminal.
-

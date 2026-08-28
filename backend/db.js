@@ -124,11 +124,14 @@ ensureColumn("students", "match_status", "TEXT NOT NULL DEFAULT 'PENDING'");
 ensureColumn("students", "rename_status", "TEXT NOT NULL DEFAULT 'PENDING'");
 ensureColumn("students", "source_path", "TEXT");
 ensureColumn("students", "destination_path", "TEXT");
+ensureColumn("students", "serial_filename", "TEXT");
+ensureColumn("students", "serial_path", "TEXT");
 ensureColumn("students", "qc_status", "TEXT NOT NULL DEFAULT 'PENDING'");
 ensureColumn("students", "qc_notes", "TEXT");
 ensureColumn("students", "processing_status", "TEXT NOT NULL DEFAULT 'PENDING'");
 ensureColumn("students", "processing_path", "TEXT");
 ensureColumn("students", "processing_notes", "TEXT");
+ensureColumn("students", "processing_background", "TEXT");
 
 ensureColumn("session_photos", "relative_path", "TEXT");
 ensureColumn("session_photos", "photo_number", "TEXT");

@@ -48,10 +48,18 @@ function buildFinalFilename(studentName, photoNumber, extension, duplicateName) 
   return `${safeBase}${ext}`;
 }
 
+function buildSerialFilename(photoNumber, extension) {
+  const safeSerial = sanitizeFilename(photoNumber);
+  const ext = String(extension || "").startsWith(".") ? extension : `.${extension}`;
+
+  return `${safeSerial}${ext}`;
+}
+
 module.exports = {
   extractPhotoNumber,
   normalizePhotoNumber,
   normalizeStudentName,
   sanitizeFilename,
   buildFinalFilename,
+  buildSerialFilename,
 };

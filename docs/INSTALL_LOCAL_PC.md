@@ -159,8 +159,7 @@ Foto tidak match:
 - Pastikan filename kamera punya angka yang sama, contoh `IMG_9693.JPG`.
 - Sistem membaca angka terakhir sebelum ekstensi filename.
 
-`destination_path` kosong:
+`destination_path` atau `serial_path` kosong:
 
-- Row yang belum `MATCHED` atau belum `DONE` memang belum punya destination.
-- Untuk session lama yang sudah rename tapi path kosong, klik `Copy & Rename` ulang. Sistem akan repair path tanpa overwrite file.
-
+- Row yang belum `MATCHED`, belum `processing_status = READY`, atau belum dibuat output cetak memang belum punya destination final.
+- Setelah semua foto selesai processing, klik `Buat Output Cetak` untuk mengisi folder `renamed` dan `serial`.
