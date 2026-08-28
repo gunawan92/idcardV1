@@ -579,6 +579,19 @@ function runRemoveBackground(sourcePath, destinationPath, backgroundColor) {
   }
 }
 
+function openWindowsFolder(folderPath) {
+  const resolvedFolder = path.resolve(folderPath);
+
+  if (!fs.existsSync(resolvedFolder)) {
+    throw new Error("Folder tidak ditemukan.");
+  }
+
+  spawnSync("explorer.exe", [resolvedFolder], {
+    windowsHide: true,
+    stdio: "ignore",
+  });
+}
+
 app.get("/", (req, res) => {
   if (fs.existsSync(frontendIndexPath)) {
     return res.sendFile(frontendIndexPath);
@@ -2185,6 +2198,52 @@ app.post("/api/sessions/:id/manifest", (req, res) => {
       data: {
         path: manifestPath,
         total_rows: rows.length,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+app.post("/api/sessions/:id/open-folder", (req, res) => {
+  try {
+    const session = getSession(req.params.id);
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        message: "Session tidak ditemukan",
+      });
+    }
+
+    const storage = ensureSessionStorage(req.params.id);
+    const folders = {
+      renamed: storage.renamedDir,
+      serial: storage.serialDir,
+      processing: storage.processingDir,
+    };
+    const folderKey = String(req.body.folder || "").toLowerCase();
+    const targetFolder = folders[folderKey];
+
+    if (!targetFolder) {
+      return res.status(400).json({
+        success: false,
+        message: "Folder tidak valid. Gunakan renamed, serial, atau processing.",
+      });
+    }
+
+    openWindowsFolder(targetFolder);
+
+    res.json({
+      success: true,
+      data: {
+        folder: folderKey,
+        path: targetFolder,
       },
     });
   } catch (error) {

@@ -816,6 +816,30 @@ export default function App() {
     }
   }
 
+  async function handleOpenOutputFolder(folder: "renamed" | "serial") {
+    if (!session) {
+      return;
+    }
+
+    try {
+      setMessage("");
+
+      const response = await fetch(`${API_URL}/api/sessions/${session.id}/open-folder`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ folder }),
+      });
+      const result = await readJson<{ folder: string; path: string }>(response);
+
+      setMessage(`Folder ${result.data.folder} dibuka: ${result.data.path}`);
+    } catch (error) {
+      console.error(error);
+      setMessage(error instanceof Error ? error.message : "Gagal membuka folder output");
+    }
+  }
+
   const filteredMatchItems = matchItems.filter((item) =>
     matchFilter === "ALL" ? true : item.status === matchFilter
   );
@@ -1817,14 +1841,33 @@ export default function App() {
                 )}
               </div>
 
-              <button
-                type="button"
-                onClick={goNextStep}
-                disabled={!hasNextStep}
-                className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
-              >
-                Next
-              </button>
+              {activeStep === "qc" && session ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleOpenOutputFolder("renamed")}
+                    className="rounded-xl bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                  >
+                    Buka Renamed
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenOutputFolder("serial")}
+                    className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+                  >
+                    Buka Serial
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={goNextStep}
+                  disabled={!hasNextStep}
+                  className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
+                >
+                  Next
+                </button>
+              )}
             </div>
           </div>
         </main>
