@@ -24,8 +24,9 @@ Cara cepat:
 1. Double click `START_V1.bat`.
 2. Tunggu 2 terminal terbuka:
    - Backend API: `http://localhost:3001`
-   - Frontend: `http://localhost:5174`
-3. Buka browser ke `http://localhost:5174`.
+   - PWA frontend: `http://localhost:5174`
+3. `START_V1.bat` akan membuka window app STELA otomatis.
+4. Kalau window app masih blank, tunggu Vite selesai lalu refresh.
 
 Cara manual:
 
@@ -42,6 +43,14 @@ Terminal frontend:
 cd /d C:\xampp\htdocs\SETDEV\production-win\frontend
 npm run dev -- --host 127.0.0.1 --port 5174
 ```
+
+Setelah frontend aktif, buka:
+
+```text
+http://localhost:5174
+```
+
+Browser Chrome/Edge akan mendeteksi STELA sebagai PWA. Operator bisa klik icon install di address bar untuk memasang shortcut app lokal.
 
 ## Shortcut Workflow Operator
 
@@ -145,9 +154,9 @@ Output:
 
 - Format JPG.
 - Mode warna RGB.
-- Background baru sesuai input hex color operator.
-- Rasio 4:3.
-- Subject center.
+- Background baru sesuai input hex color operator, atau `No Fill` untuk mempertahankan background original.
+- Rasio portrait 3:4 untuk frame pasfoto/cetak 4x3.
+- Subject center dengan posisi kepala dan bahu lebih penuh seperti sample pasfoto.
 
 Run pertama `rembg` akan download model sekitar 1 GB. Setelah itu model tersimpan di cache user Windows dan proses berikutnya tidak download ulang.
 
@@ -156,3 +165,19 @@ Karena proses ini berat, V1 sengaja dibuat 1 foto per klik untuk menghindari out
 ## Stop Aplikasi
 
 Tutup dua terminal yang dibuka `START_V1.bat`, atau tekan `Ctrl+C` di masing-masing terminal.
+
+## PWA Lokal
+
+File PWA berada di frontend:
+
+```text
+frontend\public\manifest.webmanifest
+frontend\public\service-worker.js
+frontend\public\pwa-icon.svg
+```
+
+Catatan:
+
+- PWA tetap membutuhkan backend dan frontend lokal aktif.
+- PWA bukan aplikasi offline penuh untuk proses produksi karena API backend, database, dan foto lokal tetap harus berjalan di PC.
+- `START_V1.bat` membuka Chrome/Edge dengan mode app melalui `--app=http://localhost:5174`.

@@ -473,6 +473,32 @@ function normalizeHexColor(value) {
   return hex.toUpperCase();
 }
 
+function normalizeBackgroundInput(value) {
+  const raw = String(value || "#FFFFFF").trim();
+
+  if (["none", "no_fill", "nofill", "transparent"].includes(raw.toLowerCase())) {
+    return "NO_FILL";
+  }
+
+  return normalizeHexColor(raw);
+}
+
+function safeUnlinkSessionFile(filePath, allowedDirs) {
+  if (!filePath) {
+    return;
+  }
+
+  const resolvedPath = path.resolve(filePath);
+  const allowed = allowedDirs.some((dir) => {
+    const resolvedDir = path.resolve(dir);
+    return resolvedPath === resolvedDir || resolvedPath.startsWith(resolvedDir + path.sep);
+  });
+
+  if (allowed && fs.existsSync(resolvedPath)) {
+    fs.unlinkSync(resolvedPath);
+  }
+}
+
 function runRemoveBackground(sourcePath, destinationPath, backgroundColor) {
   const workerPath = path.join(__dirname, "../worker/remove_bg.py");
   const result = spawnSync(
@@ -1496,7 +1522,7 @@ app.post("/api/sessions/:id/process", (req, res) => {
     }
 
     const limit = 1;
-    const backgroundColor = normalizeHexColor(req.body.background_color);
+    const backgroundColor = normalizeBackgroundInput(req.body.background_color);
     const storage = ensureSessionStorage(req.params.id);
     const items = db.prepare(`
       SELECT id, final_filename, source_path, processing_status
@@ -1684,6 +1710,92 @@ app.get("/api/sessions/:id/processing-items/:studentId/image", (req, res) => {
     }
 
     res.sendFile(resolvedProcessing);
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+app.post("/api/sessions/:id/processing-items/:studentId/reset", (req, res) => {
+  try {
+    const session = getSession(req.params.id);
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        message: "Session tidak ditemukan",
+      });
+    }
+
+    const storage = ensureSessionStorage(req.params.id);
+    const student = db.prepare(`
+      SELECT id, processing_path, destination_path, serial_path
+      FROM students
+      WHERE session_id = ? AND id = ? AND match_status = 'MATCHED'
+    `).get(req.params.id, req.params.studentId);
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: "Item processing tidak ditemukan",
+      });
+    }
+
+    safeUnlinkSessionFile(student.processing_path, [storage.processingDir]);
+    safeUnlinkSessionFile(student.destination_path, [storage.renamedDir]);
+    safeUnlinkSessionFile(student.serial_path, [storage.serialDir]);
+
+    db.prepare(`
+      UPDATE students
+      SET processing_status = 'PENDING',
+          processing_path = NULL,
+          processing_background = NULL,
+          processing_notes = NULL,
+          rename_status = 'PENDING',
+          destination_path = NULL,
+          serial_filename = NULL,
+          serial_path = NULL,
+          qc_status = 'PENDING',
+          qc_notes = NULL,
+          notes = NULL
+      WHERE session_id = ? AND id = ?
+    `).run(req.params.id, req.params.studentId);
+
+    db.prepare(`
+      UPDATE production_sessions
+      SET status = 'PROCESSING',
+          ready_count = (
+            SELECT COUNT(*)
+            FROM students
+            WHERE session_id = ? AND processing_status = 'READY'
+          ),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(req.params.id, req.params.id);
+
+    res.json({
+      success: true,
+      data: db.prepare(`
+        SELECT
+          id,
+          photo_number,
+          student_name,
+          class_name,
+          final_filename,
+          destination_path,
+          source_path,
+          processing_status,
+          processing_path,
+          processing_background,
+          processing_notes
+        FROM students
+        WHERE session_id = ? AND id = ?
+      `).get(req.params.id, req.params.studentId),
+    });
   } catch (error) {
     console.error(error);
 

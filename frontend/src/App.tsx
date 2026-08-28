@@ -223,6 +223,7 @@ export default function App() {
   const [processingItems, setProcessingItems] = useState<ProcessingItem[]>([]);
   const [processRunSummary, setProcessRunSummary] = useState<ProcessRunSummary | null>(null);
   const [backgroundColor, setBackgroundColor] = useState("#FFFFFF");
+  const [backgroundMode, setBackgroundMode] = useState<"FILL" | "NO_FILL">("FILL");
   const [loading, setLoading] = useState(false);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [photoLoading, setPhotoLoading] = useState(false);
@@ -230,6 +231,7 @@ export default function App() {
   const [renameLoading, setRenameLoading] = useState(false);
   const [qcLoadingId, setQcLoadingId] = useState<number | null>(null);
   const [processingLoading, setProcessingLoading] = useState(false);
+  const [processingResetId, setProcessingResetId] = useState<number | null>(null);
   const [activeStep, setActiveStep] = useState<WizardStepId>("session");
   const [message, setMessage] = useState("");
 
@@ -685,7 +687,7 @@ export default function App() {
         },
         body: JSON.stringify({
           limit: 1,
-          background_color: backgroundColor,
+          background_color: backgroundMode === "NO_FILL" ? "NO_FILL" : backgroundColor,
         }),
       });
       const result = await readJson<unknown>(response) as unknown as {
@@ -706,6 +708,42 @@ export default function App() {
     }
   }
 
+  async function handleResetProcessingItem(studentId: number) {
+    if (!session) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Reset item ini? File processing, output nama, output serial, dan status QC item ini akan dikosongkan."
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setProcessingResetId(studentId);
+      setMessage("");
+
+      const response = await fetch(`${API_URL}/api/sessions/${session.id}/processing-items/${studentId}/reset`, {
+        method: "POST",
+      });
+
+      await readJson<ProcessingItem>(response);
+      await loadProcessingItems(session.id);
+      await loadRenamedItems(session.id).catch(() => undefined);
+      await loadStudents(session.id);
+      await loadSessions();
+      setSession({ ...session, status: "PROCESSING" });
+      setMessage("Item direset. Silakan process ulang dengan mode/background yang benar.");
+    } catch (error) {
+      console.error(error);
+      setMessage(error instanceof Error ? error.message : "Gagal reset item");
+    } finally {
+      setProcessingResetId(null);
+    }
+  }
+
   const filteredMatchItems = matchItems.filter((item) =>
     matchFilter === "ALL" ? true : item.status === matchFilter
   );
@@ -723,7 +761,7 @@ export default function App() {
     if (stepId === "photos") return Boolean(summary || students.length > 0);
     if (stepId === "matching") return Boolean(photoSummary || matchSummary);
     if (stepId === "qc") return renamedItems.length > 0 || ["RENAMED", "REVIEW", "READY_FOR_PROCESSING"].includes(session?.status || "");
-    if (stepId === "processing") return Boolean(processingSummary) || ["PHOTO_MATCHED", "PROCESSING", "READY"].includes(session?.status || "");
+    if (stepId === "processing") return Boolean(processingSummary) || ["PHOTO_MATCHED", "PROCESSING", "READY", "REVIEW", "RENAMED"].includes(session?.status || "");
     return false;
   };
   const goNextStep = () => {
@@ -1500,33 +1538,59 @@ export default function App() {
               </section>
             )}
 
-            {session && activeStep === "processing" && ["PHOTO_MATCHED", "PROCESSING", "READY"].includes(session.status) && (
+            {session && activeStep === "processing" && ["PHOTO_MATCHED", "PROCESSING", "READY", "REVIEW", "RENAMED"].includes(session.status) && (
               <section className="mt-8 border-t border-slate-200 pt-8">
                 <div className="mb-5 flex items-end justify-between gap-4">
                   <div>
                     <h2 className="text-lg font-semibold">Process Foto</h2>
                     <p className="mt-1 text-sm text-slate-500">
-                      Remove background, isi warna background baru, lalu simpan JPG RGB 4:3 ke folder processing.
+                      Remove background atau No Fill, lalu simpan JPG RGB portrait 3:4 ke folder processing.
                     </p>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
-                      <input
-                        type="color"
-                        value={backgroundColor}
-                        onChange={(event) => setBackgroundColor(event.target.value.toUpperCase())}
-                        className="h-8 w-10 cursor-pointer border-0 bg-transparent p-0"
-                      />
-                      <input
-                        value={backgroundColor}
-                        onChange={(event) => setBackgroundColor(event.target.value.toUpperCase())}
-                        className="w-24 text-sm font-semibold text-slate-700 outline-none"
-                      />
+                  <div className="flex flex-wrap items-center justify-end gap-3">
+                    <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-slate-200 bg-white text-xs font-bold">
+                      <button
+                        type="button"
+                        onClick={() => setBackgroundMode("FILL")}
+                        className={`px-3 py-2 transition ${
+                          backgroundMode === "FILL"
+                            ? "bg-slate-950 text-white"
+                            : "text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >
+                        Fill
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBackgroundMode("NO_FILL")}
+                        className={`border-l border-slate-200 px-3 py-2 transition ${
+                          backgroundMode === "NO_FILL"
+                            ? "bg-slate-950 text-white"
+                            : "text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >
+                        No Fill
+                      </button>
                     </div>
+                    {backgroundMode === "FILL" && (
+                      <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                        <input
+                          type="color"
+                          value={backgroundColor}
+                          onChange={(event) => setBackgroundColor(event.target.value.toUpperCase())}
+                          className="h-8 w-10 cursor-pointer border-0 bg-transparent p-0"
+                        />
+                        <input
+                          value={backgroundColor}
+                          onChange={(event) => setBackgroundColor(event.target.value.toUpperCase())}
+                          className="w-24 text-sm font-semibold text-slate-700 outline-none"
+                        />
+                      </div>
+                    )}
                     <button
                       onClick={handleRunProcessing}
                       disabled={processingLoading || !processingSummary || processingSummary.pending === 0}
-                      className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
+                      className="rounded-lg bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
                     >
                       {processingLoading ? "Processing..." : "Process 1 Foto"}
                     </button>
@@ -1617,15 +1681,32 @@ export default function App() {
                         <div className="flex items-center gap-2 text-[11px] text-slate-500">
                           <span
                             className="h-4 w-4 rounded border border-slate-200"
-                            style={{ backgroundColor: item.processing_background || backgroundColor }}
+                            style={{
+                              backgroundColor:
+                                item.processing_background === "NO_FILL"
+                                  ? "transparent"
+                                  : item.processing_background || backgroundColor,
+                            }}
                           />
-                          <span>{item.processing_background || backgroundColor}</span>
+                          <span>
+                            {item.processing_background === "NO_FILL"
+                              ? "No Fill"
+                              : item.processing_background || (backgroundMode === "NO_FILL" ? "No Fill" : backgroundColor)}
+                          </span>
                         </div>
                         {item.processing_notes && (
                           <div className="text-[11px] text-red-600">
                             {item.processing_notes}
                           </div>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => handleResetProcessingItem(item.id)}
+                          disabled={processingResetId === item.id}
+                          className="mt-2 h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-wait disabled:bg-slate-100 disabled:text-slate-400"
+                        >
+                          {processingResetId === item.id ? "Reset..." : "Reset"}
+                        </button>
                       </div>
                     </div>
                   ))}
