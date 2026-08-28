@@ -1,0 +1,30 @@
+# env
+.env
+.env.*
+!.env.example
+
+# dependencies
+node_modules/
+ssh
+SSL NEW
+uploads/
+foto
+storage 
+
+# logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.zip

@@ -1,0 +1,97 @@
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def center_on_4_3_canvas(image, image_module):
+    alpha = image.getchannel("A")
+    bbox = alpha.getbbox()
+
+    if not bbox:
+        width, height = image.size
+        target_width, target_height = target_4_3_size(width, height)
+        return image_module.new("RGBA", (target_width, target_height), (0, 0, 0, 0))
+
+    width, height = image.size
+    target_width, target_height = target_4_3_size(width, height)
+    foreground = image.crop(bbox)
+    foreground_width, foreground_height = foreground.size
+    max_width = int(target_width * 0.92)
+    max_height = int(target_height * 0.92)
+    scale = min(max_width / foreground_width, max_height / foreground_height, 1)
+
+    if scale < 1:
+        foreground = foreground.resize(
+            (max(1, int(foreground_width * scale)), max(1, int(foreground_height * scale))),
+            image_module.Resampling.LANCZOS,
+        )
+
+    canvas = image_module.new("RGBA", (target_width, target_height), (0, 0, 0, 0))
+    paste_x = (target_width - foreground.width) // 2
+    paste_y = (target_height - foreground.height) // 2
+    canvas.alpha_composite(foreground, (paste_x, paste_y))
+    return canvas
+
+
+def target_4_3_size(width, height):
+    if width / height >= 4 / 3:
+        return int(round(height * 4 / 3)), height
+
+    return width, int(round(width * 3 / 4))
+
+
+def process_image(source_path: str, destination_path: str) -> dict:
+    try:
+        from PIL import Image
+        from rembg import remove
+    except ImportError as exc:
+        return {
+            "success": False,
+            "message": f"Dependency Python belum lengkap: {exc.name}. Jalankan pip install -r worker/requirements.txt",
+        }
+
+    source = Path(source_path)
+    destination = Path(destination_path)
+
+    if not source.exists():
+        return {"success": False, "message": "Source image tidak ditemukan."}
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with Image.open(source) as image:
+            output = remove(image.convert("RGBA"))
+            output = center_on_4_3_canvas(output, Image)
+            output.save(destination, "PNG")
+
+        if not destination.exists():
+            return {"success": False, "message": "Output tidak berhasil dibuat."}
+
+        return {
+            "success": True,
+            "source_path": str(source),
+            "destination_path": str(destination),
+            "file_size": os.path.getsize(destination),
+            "width": output.width,
+            "height": output.height,
+            "ratio": "4:3",
+        }
+    except Exception as exc:
+        return {"success": False, "message": str(exc)}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source", required=True)
+    parser.add_argument("--destination", required=True)
+    args = parser.parse_args()
+
+    result = process_image(args.source, args.destination)
+    print(json.dumps(result, ensure_ascii=False))
+    return 0 if result["success"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
