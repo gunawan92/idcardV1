@@ -22,11 +22,11 @@ V1 belum masuk approval production final, crop advanced, auto alignment detail, 
 Cara cepat:
 
 1. Double click `START_V1.bat`.
-2. Tunggu 2 terminal terbuka:
-   - Backend API: `http://localhost:3001`
-   - PWA frontend: `http://localhost:5174`
-3. `START_V1.bat` akan membuka window app STELA otomatis.
-4. Kalau window app masih blank, tunggu Vite selesai lalu refresh.
+2. `START_V1.bat` akan build frontend PWA.
+3. Tunggu 1 terminal backend terbuka:
+   - Backend + PWA: `http://localhost:3001`
+4. Window app STELA akan terbuka otomatis.
+5. Kalau window app masih blank, tunggu backend selesai start lalu refresh.
 
 Cara manual:
 
@@ -37,17 +37,17 @@ cd /d C:\xampp\htdocs\SETDEV\production-win\backend
 npm start
 ```
 
-Terminal frontend:
+Build frontend PWA jika ada perubahan UI:
 
 ```bat
 cd /d C:\xampp\htdocs\SETDEV\production-win\frontend
-npm run dev -- --host 127.0.0.1 --port 5174
+npm run build
 ```
 
-Setelah frontend aktif, buka:
+Setelah build selesai dan backend aktif, buka:
 
 ```text
-http://localhost:5174
+http://localhost:3001
 ```
 
 Browser Chrome/Edge akan mendeteksi STELA sebagai PWA. Operator bisa klik icon install di address bar untuk memasang shortcut app lokal.
@@ -178,6 +178,7 @@ frontend\public\pwa-icon.svg
 
 Catatan:
 
-- PWA tetap membutuhkan backend dan frontend lokal aktif.
+- PWA tetap membutuhkan backend lokal aktif.
 - PWA bukan aplikasi offline penuh untuk proses produksi karena API backend, database, dan foto lokal tetap harus berjalan di PC.
-- `START_V1.bat` membuka Chrome/Edge dengan mode app melalui `--app=http://localhost:5174`.
+- Frontend PWA dibaca dari `frontend\dist`, bukan dari Vite dev server.
+- `START_V1.bat` membuka Chrome/Edge dengan mode app melalui `--app=http://localhost:3001`.

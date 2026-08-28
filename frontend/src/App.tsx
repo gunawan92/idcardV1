@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import logoS from "./assets/logoS.png";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
@@ -787,8 +788,8 @@ export default function App() {
       <div className="flex min-h-screen w-full">
         <aside className="w-56 shrink-0 bg-slate-950 px-4 py-6 text-white">
           <div className="mb-10 flex items-center gap-3 px-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-600 text-sm font-bold">
-              SP
+            <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl bg-white">
+              <img src={logoS} alt="STELA" className="h-full w-full object-contain" />
             </div>
 
             <div>

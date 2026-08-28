@@ -5,18 +5,25 @@ cd /d "%~dp0"
 
 echo Starting STELA Photo Production V1...
 echo.
-echo Backend  : http://localhost:3001
-echo PWA      : http://localhost:5174
+echo Backend + PWA : http://localhost:3001
 echo.
 
-start "STELA Backend API" cmd /k "cd /d %~dp0backend && npm start"
-start "STELA Frontend" cmd /k "cd /d %~dp0frontend && npm run dev -- --host 127.0.0.1 --port 5174"
+echo Building frontend PWA...
+call npm --prefix "%~dp0frontend" run build
+if errorlevel 1 (
+  echo.
+  echo Frontend build failed. Please check the error above.
+  pause
+  exit /b 1
+)
 
-echo Two terminal windows were opened.
+start "STELA Backend + PWA" cmd /k "cd /d %~dp0backend && npm start"
+
+echo Backend terminal was opened.
 echo Opening STELA PWA window...
 timeout /t 5 /nobreak >nul
 
-set "APP_URL=http://localhost:5174"
+set "APP_URL=http://localhost:3001"
 set "CHROME_EXE=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
 set "CHROME_EXE_X86=%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
 set "EDGE_EXE=%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"
@@ -34,5 +41,5 @@ if exist "%CHROME_EXE%" (
   start "" %APP_URL%
 )
 
-echo If the PWA window is blank, wait until Vite finishes then refresh.
+echo If the PWA window is blank, wait until backend finishes starting then refresh.
 pause

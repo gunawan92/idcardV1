@@ -18,6 +18,8 @@ const {
 const app = express();
 const PORT = process.env.PORT || 3001;
 const upload = multer({ storage: multer.memoryStorage() });
+const frontendDistDir = path.join(__dirname, "../frontend/dist");
+const frontendIndexPath = path.join(frontendDistDir, "index.html");
 
 app.use(cors());
 app.use(express.json());
@@ -537,9 +539,13 @@ function runRemoveBackground(sourcePath, destinationPath, backgroundColor) {
 }
 
 app.get("/", (req, res) => {
+  if (fs.existsSync(frontendIndexPath)) {
+    return res.sendFile(frontendIndexPath);
+  }
+
   res.json({
-    success: true,
-    service: "STELA Photo Production API",
+    success: false,
+    message: "Frontend belum dibuild. Jalankan npm run build di folder frontend.",
   });
 });
 
@@ -2076,6 +2082,14 @@ app.post("/api/sessions/:id/manifest", (req, res) => {
     });
   }
 });
+
+if (fs.existsSync(frontendDistDir)) {
+  app.use(express.static(frontendDistDir));
+
+  app.get(/^\/(?!api\/).*/, (req, res) => {
+    res.sendFile(frontendIndexPath);
+  });
+}
 
 app.listen(PORT, () => {
   console.log("");
