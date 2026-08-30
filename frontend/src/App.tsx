@@ -131,6 +131,29 @@ type ManifestResult = {
   total_rows: number;
 };
 
+type QrcodeSummary = {
+  total: number;
+  requested?: number;
+  generated?: number;
+  failed: number;
+  skipped?: number;
+  done: number;
+  pending: number;
+};
+
+type QrcodeItem = {
+  id: number;
+  photo_number: string | null;
+  student_name: string;
+  class_name: string | null;
+  serial_value: string | null;
+  qrcode_status: "PENDING" | "DONE" | "FAILED";
+  qrcode_filename: string | null;
+  qrcode_path: string | null;
+  notes?: string | null;
+  message?: string | null;
+};
+
 type ProcessingItem = {
   id: number;
   photo_number: string | null;
@@ -163,7 +186,7 @@ type ApiResponse<T> = {
   message?: string;
 };
 
-type WizardStepId = "session" | "students" | "photos" | "matching" | "qc" | "processing";
+type WizardStepId = "session" | "students" | "photos" | "matching" | "processing" | "qc" | "qrcode";
 
 const WIZARD_STEPS: Array<{
   id: WizardStepId;
@@ -176,6 +199,7 @@ const WIZARD_STEPS: Array<{
   { id: "matching", label: "Matching", description: "Cek pasangan foto" },
   { id: "processing", label: "Process Foto", description: "Remove BG + warna" },
   { id: "qc", label: "Output Cetak", description: "Rename final + QC" },
+  { id: "qrcode", label: "QR Code", description: "Serial ID card" },
 ];
 
 function stepFromSessionStatus(status?: string): WizardStepId {
@@ -220,6 +244,8 @@ export default function App() {
   const [renamedItems, setRenamedItems] = useState<RenamedItem[]>([]);
   const [qcFilter, setQcFilter] = useState<"ALL" | QcStatus>("ALL");
   const [manifest, setManifest] = useState<ManifestResult | null>(null);
+  const [qrcodeSummary, setQrcodeSummary] = useState<QrcodeSummary | null>(null);
+  const [qrcodeItems, setQrcodeItems] = useState<QrcodeItem[]>([]);
   const [processingSummary, setProcessingSummary] = useState<ProcessingSummary | null>(null);
   const [processingItems, setProcessingItems] = useState<ProcessingItem[]>([]);
   const [processRunSummary, setProcessRunSummary] = useState<ProcessRunSummary | null>(null);
@@ -234,6 +260,7 @@ export default function App() {
   const [processingLoading, setProcessingLoading] = useState(false);
   const [processingBatchLoading, setProcessingBatchLoading] = useState(false);
   const [processingResetId, setProcessingResetId] = useState<number | null>(null);
+  const [qrcodeLoading, setQrcodeLoading] = useState(false);
   const [activeStep, setActiveStep] = useState<WizardStepId>("session");
   const [message, setMessage] = useState("");
 
@@ -297,6 +324,17 @@ export default function App() {
     setProcessingItems(result.data.items);
   }
 
+  async function loadQrcodeItems(sessionId: number) {
+    const response = await fetch(`${API_URL}/api/sessions/${sessionId}/qrcodes`);
+    const result = await readJson<{
+      summary: QrcodeSummary;
+      items: QrcodeItem[];
+    }>(response);
+
+    setQrcodeSummary(result.data.summary);
+    setQrcodeItems(result.data.items);
+  }
+
   async function loadSessionDetail(sessionId: number) {
     try {
       setSessionLoading(true);
@@ -312,6 +350,8 @@ export default function App() {
       setProcessingSummary(null);
       setProcessingItems([]);
       setProcessRunSummary(null);
+      setQrcodeSummary(null);
+      setQrcodeItems([]);
       setManifest(null);
       setQcSummary(null);
       setRenamedItems([]);
@@ -319,6 +359,8 @@ export default function App() {
       setProcessingSummary(null);
       setProcessingItems([]);
       setProcessRunSummary(null);
+      setQrcodeSummary(null);
+      setQrcodeItems([]);
       setManifest(null);
       setManifest(null);
 
@@ -387,6 +429,7 @@ export default function App() {
 
       if (["RENAMED", "REVIEW", "READY_FOR_PROCESSING"].includes(selectedSession.status)) {
         await loadRenamedItems(sessionId);
+        await loadQrcodeItems(sessionId);
       }
 
       if (["PHOTO_MATCHED", "PROCESSING", "READY", "READY_FOR_PROCESSING"].includes(selectedSession.status)) {
@@ -580,6 +623,7 @@ export default function App() {
       await loadStudents(session.id);
       await loadSessionDetail(session.id);
       await loadRenamedItems(session.id);
+      await loadQrcodeItems(session.id);
       setActiveStep("qc");
       setMessage(`${result.summary.renamed} berhasil, ${result.summary.failed} gagal, ${result.summary.skipped} dilewati.`);
     } catch (error) {
@@ -609,6 +653,37 @@ export default function App() {
     } catch (error) {
       console.error(error);
       setMessage(error instanceof Error ? error.message : "Gagal membuat manifest");
+    }
+  }
+
+  async function handleGenerateQrcodes() {
+    if (!session) {
+      setMessage("Session belum tersedia.");
+      return;
+    }
+
+    try {
+      setQrcodeLoading(true);
+      setMessage("");
+
+      const response = await fetch(`${API_URL}/api/sessions/${session.id}/qrcodes`, {
+        method: "POST",
+      });
+      const result = await readJson<{
+        summary: QrcodeSummary;
+        items: QrcodeItem[];
+      }>(response);
+
+      setQrcodeSummary(result.data.summary);
+      setQrcodeItems(result.data.items);
+      setMessage(
+        `QR selesai: ${result.data.summary.generated || 0} dibuat, ${result.data.summary.skipped || 0} dilewati, ${result.data.summary.failed} gagal.`
+      );
+    } catch (error) {
+      console.error(error);
+      setMessage(error instanceof Error ? error.message : "Gagal generate QR code");
+    } finally {
+      setQrcodeLoading(false);
     }
   }
 
@@ -816,7 +891,7 @@ export default function App() {
     }
   }
 
-  async function handleOpenOutputFolder(folder: "renamed" | "serial") {
+  async function handleOpenOutputFolder(folder: "renamed" | "serial" | "qrcode") {
     if (!session) {
       return;
     }
@@ -858,6 +933,7 @@ export default function App() {
     if (stepId === "matching") return Boolean(photoSummary || matchSummary);
     if (stepId === "qc") return renamedItems.length > 0 || ["RENAMED", "REVIEW", "READY_FOR_PROCESSING"].includes(session?.status || "");
     if (stepId === "processing") return Boolean(processingSummary) || ["PHOTO_MATCHED", "PROCESSING", "READY", "REVIEW", "RENAMED"].includes(session?.status || "");
+    if (stepId === "qrcode") return Boolean(qrcodeSummary || renamedItems.length > 0 || ["RENAMED", "REVIEW", "READY_FOR_PROCESSING"].includes(session?.status || ""));
     return false;
   };
   const goNextStep = () => {
@@ -1821,6 +1897,114 @@ export default function App() {
               </section>
             )}
 
+            {session && activeStep === "qrcode" && (
+              <section className="mt-8 border-t border-slate-200 pt-8">
+                <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-semibold">QR Code</h2>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Generate JPG QR code hanya untuk data valid yang sudah matched, processed, dan rename DONE.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleGenerateQrcodes}
+                      disabled={qrcodeLoading}
+                      className="rounded-lg bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-300 disabled:text-slate-500"
+                    >
+                      {qrcodeLoading ? "Generate..." : "Generate QR"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenOutputFolder("qrcode")}
+                      className="rounded-lg bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                    >
+                      Buka Folder QR
+                    </button>
+                  </div>
+                </div>
+
+                {qrcodeSummary && (
+                  <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-xs font-medium uppercase text-slate-400">Total</div>
+                      <div className="text-xl font-bold text-slate-700">{qrcodeSummary.total || qrcodeSummary.requested || 0}</div>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-xs font-medium uppercase text-slate-400">Done</div>
+                      <div className="text-xl font-bold text-emerald-600">{qrcodeSummary.done || qrcodeSummary.generated || 0}</div>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-xs font-medium uppercase text-slate-400">Pending</div>
+                      <div className="text-xl font-bold text-slate-600">{qrcodeSummary.pending || 0}</div>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-xs font-medium uppercase text-slate-400">Failed</div>
+                      <div className="text-xl font-bold text-red-600">{qrcodeSummary.failed || 0}</div>
+                    </div>
+                  </div>
+                )}
+
+                {qrcodeItems.length === 0 ? (
+                  <div className="rounded-xl border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-500">
+                    Belum ada QR code. Klik Generate QR untuk membuat file JPG di folder qrcode.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-4">
+                    {qrcodeItems.map((item) => (
+                      <div key={item.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                        <div className="relative flex aspect-square items-center justify-center bg-white p-4">
+                          {item.qrcode_status === "DONE" ? (
+                            <img
+                              src={`${API_URL}/api/sessions/${session.id}/qrcodes/${item.id}/image`}
+                              alt={item.serial_value || item.student_name}
+                              className="h-full w-full object-contain"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <div className="text-center text-sm text-slate-400">
+                              {item.qrcode_status === "FAILED" ? "QR gagal" : "Belum dibuat"}
+                            </div>
+                          )}
+                          <span
+                            className={`absolute right-2 top-2 rounded-full px-2 py-1 text-[10px] font-bold ${
+                              item.qrcode_status === "DONE"
+                                ? "bg-emerald-600 text-white"
+                                : item.qrcode_status === "FAILED"
+                                  ? "bg-red-600 text-white"
+                                  : "bg-white text-slate-700 ring-1 ring-slate-200"
+                            }`}
+                          >
+                            {item.qrcode_status}
+                          </span>
+                        </div>
+                        <div className="space-y-2 p-3">
+                          <div className="truncate text-sm font-semibold text-slate-950">
+                            {item.student_name}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            {item.photo_number || "-"} - {item.class_name || "-"}
+                          </div>
+                          <div className="truncate rounded-md bg-slate-50 px-2 py-1.5 text-[11px] font-semibold text-slate-700">
+                            {item.serial_value || "-"}
+                          </div>
+                          <div className="truncate rounded-md bg-red-50 px-2 py-1.5 text-[11px] font-semibold text-red-700">
+                            {item.qrcode_filename || "-"}
+                          </div>
+                          {(item.message || item.notes) && (
+                            <div className="text-[11px] text-red-600">
+                              {item.message || item.notes}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
+
             <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-6">
               <button
                 type="button"
@@ -1841,23 +2025,14 @@ export default function App() {
                 )}
               </div>
 
-              {activeStep === "qc" && session ? (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleOpenOutputFolder("renamed")}
-                    className="rounded-xl bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50"
-                  >
-                    Buka Renamed
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleOpenOutputFolder("serial")}
-                    className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-                  >
-                    Buka Serial
-                  </button>
-                </div>
+              {activeStep === "qrcode" && session ? (
+                <button
+                  type="button"
+                  onClick={() => handleOpenOutputFolder("qrcode")}
+                  className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+                >
+                  Buka Folder QR
+                </button>
               ) : (
                 <button
                   type="button"
@@ -1865,7 +2040,7 @@ export default function App() {
                   disabled={!hasNextStep}
                   className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
                 >
-                  Next
+                  {activeStep === "qc" ? "Generate QR Code" : "Next"}
                 </button>
               )}
             </div>

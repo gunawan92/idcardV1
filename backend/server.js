@@ -5,6 +5,8 @@ const fs = require("fs");
 const multer = require("multer");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const jpeg = require("jpeg-js");
+const QRCode = require("qrcode");
 const XLSX = require("xlsx");
 const db = require("./db");
 const {
@@ -67,7 +69,7 @@ function mappedValue(row, columnIndex) {
 
 function ensureSessionStorage(sessionId) {
   const baseDir = path.join(__dirname, "../storage/sessions", String(sessionId));
-  const dirs = ["import", "renamed", "serial", "processing", "review", "ready"];
+  const dirs = ["import", "renamed", "serial", "qrcode", "processing", "review", "ready"];
 
   for (const dir of dirs) {
     fs.mkdirSync(path.join(baseDir, dir), { recursive: true });
@@ -78,6 +80,7 @@ function ensureSessionStorage(sessionId) {
     importDir: path.join(baseDir, "import"),
     renamedDir: path.join(baseDir, "renamed"),
     serialDir: path.join(baseDir, "serial"),
+    qrcodeDir: path.join(baseDir, "qrcode"),
     processingDir: path.join(baseDir, "processing"),
   };
 }
@@ -236,6 +239,119 @@ function getSession(id) {
     FROM production_sessions
     WHERE id = ?
   `).get(id);
+}
+
+function deriveSessionWorkflowStatus(sessionId, currentStatus) {
+  const summary = db.prepare(`
+    SELECT
+      COUNT(*) AS total_students,
+      SUM(CASE WHEN match_status = 'MATCHED' THEN 1 ELSE 0 END) AS matched,
+      SUM(CASE WHEN match_status = 'PHOTO_MISSING' THEN 1 ELSE 0 END) AS missing,
+      SUM(CASE WHEN match_status IN ('DUPLICATE_NUMBER', 'FILENAME_CONFLICT', 'INVALID_DATA') THEN 1 ELSE 0 END) AS match_review,
+      SUM(CASE WHEN match_status = 'MATCHED' AND processing_status = 'READY' THEN 1 ELSE 0 END) AS processing_ready,
+      SUM(CASE WHEN match_status = 'MATCHED' AND processing_status IN ('PENDING', 'FAILED') THEN 1 ELSE 0 END) AS processing_blocked,
+      SUM(CASE WHEN match_status = 'MATCHED' AND processing_status = 'FAILED' THEN 1 ELSE 0 END) AS processing_failed,
+      SUM(CASE WHEN match_status = 'MATCHED' AND rename_status = 'DONE' THEN 1 ELSE 0 END) AS rename_done,
+      SUM(CASE WHEN match_status = 'MATCHED' AND rename_status = 'FAILED' THEN 1 ELSE 0 END) AS rename_failed,
+      SUM(CASE WHEN match_status = 'MATCHED' AND qc_status IN ('NEEDS_REVIEW', 'REJECTED') THEN 1 ELSE 0 END) AS qc_review
+    FROM students
+    WHERE session_id = ?
+  `).get(sessionId);
+  const totalPhotos = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM session_photos
+    WHERE session_id = ?
+  `).get(sessionId).total || 0;
+  const totalStudents = summary.total_students || 0;
+  const matched = summary.matched || 0;
+  const processingReady = summary.processing_ready || 0;
+  const renameDone = summary.rename_done || 0;
+  const hasReview =
+    (summary.processing_failed || 0) > 0 ||
+    (summary.rename_failed || 0) > 0 ||
+    (summary.qc_review || 0) > 0;
+
+  if (currentStatus === "READY_FOR_PROCESSING" || currentStatus === "COMPLETED") {
+    return {
+      status: currentStatus,
+      totalStudents,
+      totalPhotos,
+      matched,
+      missing: summary.missing || 0,
+      review: hasReview ? 1 : 0,
+      ready: processingReady,
+    };
+  }
+
+  let status = currentStatus || "DRAFT";
+
+  if (totalStudents === 0) {
+    status = "DRAFT";
+  } else if (matched === 0) {
+    status = "DATA_IMPORTED";
+  } else if (renameDone === matched) {
+    status = hasReview ? "REVIEW" : "RENAMED";
+  } else if (hasReview) {
+    status = "REVIEW";
+  } else if (processingReady === matched) {
+    status = "READY";
+  } else if (processingReady > 0) {
+    status = "PROCESSING";
+  } else {
+    status = "PHOTO_MATCHED";
+  }
+
+  return {
+    status,
+    totalStudents,
+    totalPhotos,
+    matched,
+    missing: summary.missing || 0,
+    review: hasReview ? 1 : 0,
+    ready: processingReady,
+  };
+}
+
+function syncSessionWorkflowStatus(sessionId) {
+  const current = getSession(sessionId);
+
+  if (!current) {
+    return null;
+  }
+
+  const derived = deriveSessionWorkflowStatus(sessionId, current.status);
+
+  db.prepare(`
+    UPDATE production_sessions
+    SET status = ?,
+        total_students = ?,
+        total_photos = ?,
+        matched_count = ?,
+        missing_count = ?,
+        review_count = ?,
+        ready_count = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    derived.status,
+    derived.totalStudents,
+    derived.totalPhotos,
+    derived.matched,
+    derived.missing,
+    derived.review,
+    derived.ready,
+    sessionId
+  );
+
+  return getSession(sessionId);
+}
+
+function syncAllSessionWorkflowStatuses() {
+  const sessions = db.prepare("SELECT id FROM production_sessions").all();
+
+  for (const session of sessions) {
+    syncSessionWorkflowStatus(session.id);
+  }
 }
 
 function scanPhotoFiles(folderPath) {
@@ -501,6 +617,60 @@ function serialValueFromRawData(rawData) {
   return null;
 }
 
+function buildQrcodeFilename(serialValue) {
+  return buildSerialFilename(serialValue, ".jpg");
+}
+
+function writeQrcodeJpeg(filePath, value) {
+  const qr = QRCode.create(value, { errorCorrectionLevel: "M" });
+  const moduleCount = qr.modules.size;
+  const margin = 4;
+  const scale = 8;
+  const size = (moduleCount + margin * 2) * scale;
+  const data = Buffer.alloc(size * size * 4, 255);
+
+  for (let y = 0; y < moduleCount; y += 1) {
+    for (let x = 0; x < moduleCount; x += 1) {
+      if (!qr.modules.get(x, y)) {
+        continue;
+      }
+
+      const startX = (x + margin) * scale;
+      const startY = (y + margin) * scale;
+
+      for (let py = 0; py < scale; py += 1) {
+        for (let px = 0; px < scale; px += 1) {
+          const index = ((startY + py) * size + startX + px) * 4;
+          data[index] = 0;
+          data[index + 1] = 0;
+          data[index + 2] = 0;
+          data[index + 3] = 255;
+        }
+      }
+    }
+  }
+
+  const encoded = jpeg.encode({ data, width: size, height: size }, 95);
+  fs.writeFileSync(filePath, encoded.data);
+}
+
+function isJpegFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return false;
+  }
+
+  const file = fs.openSync(filePath, "r");
+  const buffer = Buffer.alloc(3);
+
+  try {
+    fs.readSync(file, buffer, 0, 3, 0);
+  } finally {
+    fs.closeSync(file);
+  }
+
+  return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+}
+
 function normalizeHexColor(value) {
   const raw = String(value || "#FFFFFF").trim();
   const hex = raw.startsWith("#") ? raw : `#${raw}`;
@@ -651,6 +821,8 @@ app.post("/api/sessions", (req, res) => {
 
 app.get("/api/sessions", (req, res) => {
   try {
+    syncAllSessionWorkflowStatuses();
+
     const sessions = db.prepare(`
       SELECT *
       FROM production_sessions
@@ -673,7 +845,7 @@ app.get("/api/sessions", (req, res) => {
 
 app.get("/api/sessions/:id", (req, res) => {
   try {
-    const session = getSession(req.params.id);
+    const session = syncSessionWorkflowStatus(req.params.id);
 
     if (!session) {
       return res.status(404).json({
@@ -742,7 +914,7 @@ app.post("/api/sessions/:id/import-xlsx", upload.single("file"), (req, res) => {
   const startedAt = Date.now();
 
   try {
-    const session = getSession(req.params.id);
+    const session = syncSessionWorkflowStatus(req.params.id);
 
     if (!session) {
       return res.status(404).json({
@@ -955,7 +1127,7 @@ app.get("/api/sessions/:id/students", (req, res) => {
 
 app.post("/api/sessions/:id/photo-source", (req, res) => {
   try {
-    const session = getSession(req.params.id);
+    const session = syncSessionWorkflowStatus(req.params.id);
 
     if (!session) {
       return res.status(404).json({
@@ -1110,7 +1282,7 @@ app.post("/api/sessions/:id/match-photos", (req, res) => {
   const startedAt = Date.now();
 
   try {
-    const session = getSession(req.params.id);
+    const session = syncSessionWorkflowStatus(req.params.id);
 
     if (!session) {
       return res.status(404).json({
@@ -1506,7 +1678,7 @@ app.put("/api/sessions/:id/renamed-items/:studentId/qc", (req, res) => {
 
 app.post("/api/sessions/:id/ready-for-processing", (req, res) => {
   try {
-    const session = getSession(req.params.id);
+    const session = syncSessionWorkflowStatus(req.params.id);
 
     if (!session) {
       return res.status(404).json({
@@ -1565,7 +1737,7 @@ app.post("/api/sessions/:id/process", (req, res) => {
   const startedAt = Date.now();
 
   try {
-    const session = getSession(req.params.id);
+    const session = syncSessionWorkflowStatus(req.params.id);
 
     if (!session) {
       return res.status(404).json({
@@ -2144,6 +2316,9 @@ app.post("/api/sessions/:id/manifest", (req, res) => {
         processing_status,
         processing_path,
         processing_notes,
+        qrcode_status,
+        qrcode_filename,
+        qrcode_path,
         source_path,
         destination_path,
         serial_path,
@@ -2176,6 +2351,9 @@ app.post("/api/sessions/:id/manifest", (req, res) => {
         processing_path: student.processing_path || "",
         processing_background: student.processing_background || "",
         processing_notes: student.processing_notes || "",
+        qrcode_status: student.qrcode_status || "",
+        qrcode_filename: student.qrcode_filename || "",
+        qrcode_path: student.qrcode_path || "",
         source_path: student.source_path || "",
         destination_path: student.destination_path || "",
         serial_path: student.serial_path || "",
@@ -2210,6 +2388,223 @@ app.post("/api/sessions/:id/manifest", (req, res) => {
   }
 });
 
+app.post("/api/sessions/:id/qrcodes", async (req, res) => {
+  const startedAt = Date.now();
+
+  try {
+    const session = getSession(req.params.id);
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        message: "Session tidak ditemukan",
+      });
+    }
+
+    const storage = ensureSessionStorage(req.params.id);
+    const students = db.prepare(`
+      SELECT id, photo_number, student_name, class_name, raw_data, qrcode_status, qrcode_filename, qrcode_path
+      FROM students
+      WHERE session_id = ?
+        AND is_valid = 1
+        AND match_status = 'MATCHED'
+        AND processing_status = 'READY'
+        AND rename_status = 'DONE'
+      ORDER BY import_row_number ASC, id ASC
+    `).all(req.params.id);
+    db.prepare(`
+      UPDATE students
+      SET qrcode_status = 'PENDING',
+          qrcode_filename = NULL,
+          qrcode_path = NULL
+      WHERE session_id = ?
+        AND (
+          is_valid != 1
+          OR match_status != 'MATCHED'
+          OR processing_status != 'READY'
+          OR rename_status != 'DONE'
+        )
+    `).run(req.params.id);
+    const updateQrcode = db.prepare(`
+      UPDATE students
+      SET qrcode_status = ?,
+          qrcode_filename = ?,
+          qrcode_path = ?,
+          notes = ?
+      WHERE id = ?
+    `);
+    const summary = {
+      total: students.length,
+      requested: students.length,
+      generated: 0,
+      failed: 0,
+      skipped: 0,
+      done: 0,
+      pending: 0,
+    };
+    const items = [];
+
+    for (const student of students) {
+      const serialValue = serialValueFromRawData(student.raw_data);
+
+      try {
+        if (!serialValue) {
+          throw new Error("Serial/idkartu kosong di data XLSX.");
+        }
+
+        const filename = buildQrcodeFilename(serialValue);
+        const qrcodePath = path.join(storage.qrcodeDir, filename);
+
+        if (student.qrcode_status === "DONE" && student.qrcode_path === qrcodePath && isJpegFile(qrcodePath)) {
+          summary.skipped += 1;
+        } else {
+          writeQrcodeJpeg(qrcodePath, serialValue);
+          summary.generated += 1;
+        }
+
+        updateQrcode.run("DONE", filename, qrcodePath, null, student.id);
+        summary.done += 1;
+        items.push({
+          id: student.id,
+          photo_number: student.photo_number,
+          student_name: student.student_name,
+          class_name: student.class_name,
+          serial_value: serialValue,
+          qrcode_status: "DONE",
+          qrcode_filename: filename,
+          qrcode_path: qrcodePath,
+        });
+      } catch (error) {
+        const fallbackFilename = serialValue ? buildQrcodeFilename(serialValue) : null;
+        const fallbackPath = fallbackFilename ? path.join(storage.qrcodeDir, fallbackFilename) : null;
+
+        updateQrcode.run("FAILED", fallbackFilename, fallbackPath, error.message, student.id);
+        summary.failed += 1;
+        items.push({
+          id: student.id,
+          photo_number: student.photo_number,
+          student_name: student.student_name,
+          class_name: student.class_name,
+          serial_value: serialValue,
+          qrcode_status: "FAILED",
+          qrcode_filename: fallbackFilename,
+          qrcode_path: fallbackPath,
+          message: error.message,
+        });
+      }
+    }
+
+    console.log(
+      `[SESSION ${req.params.id}] QRCODE generated=${summary.generated} failed=${summary.failed} skipped=${summary.skipped} duration=${Date.now() - startedAt}ms`
+    );
+
+    res.json({
+      success: true,
+      data: {
+        summary,
+        items,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+app.get("/api/sessions/:id/qrcodes", (req, res) => {
+  try {
+    if (!getSession(req.params.id)) {
+      return res.status(404).json({
+        success: false,
+        message: "Session tidak ditemukan",
+      });
+    }
+
+    const items = db.prepare(`
+      SELECT id, photo_number, student_name, class_name, raw_data, qrcode_status, qrcode_filename, qrcode_path, notes
+      FROM students
+      WHERE session_id = ?
+        AND is_valid = 1
+        AND match_status = 'MATCHED'
+        AND processing_status = 'READY'
+        AND rename_status = 'DONE'
+      ORDER BY import_row_number ASC, id ASC
+    `).all(req.params.id).map((student) => ({
+      id: student.id,
+      photo_number: student.photo_number,
+      student_name: student.student_name,
+      class_name: student.class_name,
+      serial_value: serialValueFromRawData(student.raw_data),
+      qrcode_status: student.qrcode_status,
+      qrcode_filename: student.qrcode_filename,
+      qrcode_path: student.qrcode_path,
+      notes: student.notes,
+    }));
+    const summary = {
+      total: items.length,
+      done: items.filter((item) => item.qrcode_status === "DONE").length,
+      failed: items.filter((item) => item.qrcode_status === "FAILED").length,
+      pending: items.filter((item) => item.qrcode_status !== "DONE" && item.qrcode_status !== "FAILED").length,
+    };
+
+    res.json({
+      success: true,
+      data: {
+        summary,
+        items,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+app.get("/api/sessions/:id/qrcodes/:studentId/image", (req, res) => {
+  try {
+    const student = db.prepare(`
+      SELECT qrcode_path
+      FROM students
+      WHERE session_id = ? AND id = ? AND qrcode_status = 'DONE'
+    `).get(req.params.id, req.params.studentId);
+
+    if (!student || !student.qrcode_path || !fs.existsSync(student.qrcode_path)) {
+      return res.status(404).json({
+        success: false,
+        message: "File QR code tidak ditemukan",
+      });
+    }
+
+    const storage = ensureSessionStorage(req.params.id);
+    const resolvedQrcode = path.resolve(student.qrcode_path);
+    const resolvedQrcodeDir = path.resolve(storage.qrcodeDir);
+
+    if (!resolvedQrcode.startsWith(resolvedQrcodeDir + path.sep)) {
+      return res.status(403).json({
+        success: false,
+        message: "Path file tidak valid",
+      });
+    }
+
+    res.sendFile(resolvedQrcode);
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
 app.post("/api/sessions/:id/open-folder", (req, res) => {
   try {
     const session = getSession(req.params.id);
@@ -2225,6 +2620,7 @@ app.post("/api/sessions/:id/open-folder", (req, res) => {
     const folders = {
       renamed: storage.renamedDir,
       serial: storage.serialDir,
+      qrcode: storage.qrcodeDir,
       processing: storage.processingDir,
     };
     const folderKey = String(req.body.folder || "").toLowerCase();
@@ -2233,7 +2629,7 @@ app.post("/api/sessions/:id/open-folder", (req, res) => {
     if (!targetFolder) {
       return res.status(400).json({
         success: false,
-        message: "Folder tidak valid. Gunakan renamed, serial, atau processing.",
+        message: "Folder tidak valid. Gunakan renamed, serial, qrcode, atau processing.",
       });
     }
 

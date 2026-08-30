@@ -132,6 +132,9 @@ ensureColumn("students", "processing_status", "TEXT NOT NULL DEFAULT 'PENDING'")
 ensureColumn("students", "processing_path", "TEXT");
 ensureColumn("students", "processing_notes", "TEXT");
 ensureColumn("students", "processing_background", "TEXT");
+ensureColumn("students", "qrcode_status", "TEXT NOT NULL DEFAULT 'PENDING'");
+ensureColumn("students", "qrcode_filename", "TEXT");
+ensureColumn("students", "qrcode_path", "TEXT");
 
 ensureColumn("session_photos", "relative_path", "TEXT");
 ensureColumn("session_photos", "photo_number", "TEXT");
@@ -153,6 +156,9 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_students_processing_status
   ON students(processing_status);
+
+  CREATE INDEX IF NOT EXISTS idx_students_qrcode_status
+  ON students(qrcode_status);
 
   CREATE INDEX IF NOT EXISTS idx_session_photos_photo_number
   ON session_photos(photo_number);

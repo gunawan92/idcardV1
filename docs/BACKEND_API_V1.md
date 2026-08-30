@@ -208,6 +208,34 @@ Payload QC:
 }
 ```
 
+## QR Code Serial
+
+```http
+POST /api/sessions/:id/qrcodes
+GET  /api/sessions/:id/qrcodes
+GET  /api/sessions/:id/qrcodes/:studentId/image
+POST /api/sessions/:id/open-folder
+```
+
+Behavior:
+
+- QR dibuat dari kolom `serial` atau `idkartu` di XLSX.
+- QR hanya dibuat untuk siswa `is_valid = 1`, `match_status = MATCHED`, `processing_status = READY`, dan `rename_status = DONE`.
+- Isi QR hanya value serial, contoh `ALZIN51999`.
+- File QR disimpan sebagai JPG:
+
+```text
+storage\sessions\1\qrcode\ALZIN51999.jpg
+```
+
+Payload buka folder QR:
+
+```json
+{
+  "folder": "qrcode"
+}
+```
+
 Status QC:
 
 ```text

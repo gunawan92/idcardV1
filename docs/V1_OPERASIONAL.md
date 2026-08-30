@@ -13,7 +13,8 @@ V1 berhenti sampai workflow berikut:
 7. Output processing berupa JPG RGB untuk Fill, atau PNG transparan untuk No Fill.
 8. Rename hasil processing ke dua folder output: nama murid dan serial cetak.
 9. QC hasil output cetak: OK, Cek, Tolak.
-10. Buat manifest XLSX.
+10. Generate QR code serial/idkartu untuk bahan production ID card.
+11. Buat manifest XLSX.
 
 V1 belum masuk approval production final, crop advanced, auto alignment detail, ready-to-print packaging final, atau agent integration.
 
@@ -106,6 +107,19 @@ C:\xampp\htdocs\SETDEV\production-win\bahan\SD ALZIND 24 8 2026\foto
    - Dari area hasil rename, klik `Buat Manifest`.
    - File manifest dibuat di folder session.
 
+8. Step `QR Code`
+   - Klik `Generate QR`.
+   - Sistem membuat file JPG QR per siswa dari value `serial` atau `idkartu`.
+   - QR hanya dibuat untuk data valid yang sudah `MATCHED`, `READY`, dan `rename_status = DONE`.
+   - Contoh isi QR: `ALZIN51999`.
+   - Contoh file output:
+
+```text
+storage\sessions\1\qrcode\ALZIN51999.jpg
+```
+
+   - Klik `Buka Folder QR` untuk membuka folder hasil QR di Windows Explorer.
+
 ## Folder Output
 
 Data aplikasi:
@@ -126,6 +140,7 @@ Isi folder session:
 import\       file Excel yang diimport
 renamed\      hasil copy + rename dengan nama murid
 serial\       hasil copy + rename dengan serial/idkartu untuk cetak
+qrcode\       file JPG QR code dari serial/idkartu untuk production ID card
 processing\   hasil process foto: JPG RGB untuk Fill, PNG transparan untuk No Fill
 review\       disiapkan untuk tahap berikutnya
 ready\        disiapkan untuk tahap berikutnya
@@ -139,9 +154,12 @@ Output cetak V1 sengaja dibuat dua versi setelah processing selesai:
 ```text
 renamed\Allysha Putri Anwar.jpg
 serial\ALZIN51999.jpg
+qrcode\ALZIN51999.jpg
 ```
 
 Nilai serial berasal dari kolom `serial` atau `idkartu` di XLSX. `No Foto` hanya dipakai untuk matching foto kamera. File di folder `renamed` dan `serial` berasal dari JPG hasil processing, bukan dari RAW original.
+
+QR code berisi value serial itu sendiri, bukan path file dan bukan nama murid.
 
 ## Catatan Remove Background
 
