@@ -748,7 +748,7 @@ export default function App() {
     }
   }
 
-  async function runProcessingOnce() {
+  async function runProcessingOnce(options: { skipImageProcess?: boolean } = {}) {
     if (!session) {
       throw new Error("Session belum tersedia.");
     }
@@ -761,6 +761,7 @@ export default function App() {
       body: JSON.stringify({
         limit: 1,
         background_color: backgroundMode === "NO_FILL" ? "NO_FILL" : backgroundColor,
+        skip_image_process: options.skipImageProcess === true,
       }),
     });
     const result = await readJson<unknown>(response) as unknown as {
@@ -793,7 +794,28 @@ export default function App() {
     }
   }
 
-  async function handleRunProcessingBatch() {
+  async function handleSkipProcessing() {
+    try {
+      setProcessingLoading(true);
+      setMessage("");
+
+      const result = await runProcessingOnce({ skipImageProcess: true });
+
+      setProcessRunSummary(result.summary);
+      if (session) {
+        await loadProcessingItems(session.id);
+        await loadSessions();
+      }
+      setMessage(`Skip process selesai: ${result.summary.skipped} dilewati, ${result.summary.failed} gagal, ${result.remaining} tersisa.`);
+    } catch (error) {
+      console.error(error);
+      setMessage(error instanceof Error ? error.message : "Gagal skip processing");
+    } finally {
+      setProcessingLoading(false);
+    }
+  }
+
+  async function handleRunProcessingBatch(options: { skipImageProcess?: boolean } = {}) {
     if (!session) {
       return;
     }
@@ -805,8 +827,9 @@ export default function App() {
       return;
     }
 
+    const actionLabel = options.skipImageProcess ? "Skip process image batch" : "Process batch";
     const confirmed = window.confirm(
-      `Process batch ${totalPending} foto?\n\nSistem tetap memproses 1 foto per request, tunggu selesai, lalu lanjut foto berikutnya.`
+      `${actionLabel} ${totalPending} foto?\n\nSistem tetap menjalankan 1 foto per request, tunggu selesai, lalu lanjut foto berikutnya.`
     );
 
     if (!confirmed) {
@@ -815,21 +838,21 @@ export default function App() {
 
     try {
       setProcessingBatchLoading(true);
-      setMessage(`Batch mulai: 0/${totalPending} selesai.`);
+      setMessage(`${options.skipImageProcess ? "Skip batch" : "Batch"} mulai: 0/${totalPending} selesai.`);
 
       let completed = 0;
       let remaining = totalPending;
       let failed = 0;
 
       while (remaining > 0) {
-        const result = await runProcessingOnce();
+        const result = await runProcessingOnce({ skipImageProcess: options.skipImageProcess });
 
         completed += result.summary.processed + result.summary.skipped;
         failed += result.summary.failed;
         remaining = result.remaining;
         setProcessRunSummary(result.summary);
         await loadProcessingItems(session.id);
-        setMessage(`Batch berjalan: ${completed}/${totalPending} selesai, ${failed} gagal, ${remaining} tersisa.`);
+        setMessage(`${options.skipImageProcess ? "Skip batch" : "Batch"} berjalan: ${completed}/${totalPending} selesai, ${failed} gagal, ${remaining} tersisa.`);
 
         if (result.summary.failed > 0) {
           break;
@@ -844,8 +867,8 @@ export default function App() {
       await loadSessions();
       setMessage(
         failed > 0
-          ? `Batch berhenti: ${completed}/${totalPending} selesai, ${failed} gagal. Cek item gagal sebelum lanjut.`
-          : `Batch selesai: ${completed}/${totalPending} foto diproses.`
+          ? `${options.skipImageProcess ? "Skip batch" : "Batch"} berhenti: ${completed}/${totalPending} selesai, ${failed} gagal. Cek item gagal sebelum lanjut.`
+          : `${options.skipImageProcess ? "Skip batch" : "Batch"} selesai: ${completed}/${totalPending} foto ${options.skipImageProcess ? "dilewati" : "diproses"}.`
       );
     } catch (error) {
       console.error(error);
@@ -1771,11 +1794,25 @@ export default function App() {
                       {processingLoading ? "Processing..." : "Process 1 Foto"}
                     </button>
                     <button
-                      onClick={handleRunProcessingBatch}
+                      onClick={handleSkipProcessing}
+                      disabled={processingLoading || processingBatchLoading || !processingSummary || processingSummary.pending === 0}
+                      className="rounded-lg border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      {processingLoading ? "Skip..." : "Skip 1 Foto"}
+                    </button>
+                    <button
+                      onClick={() => handleRunProcessingBatch()}
                       disabled={processingLoading || processingBatchLoading || !processingSummary || processingSummary.pending === 0}
                       className="rounded-lg bg-red-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
                     >
                       {processingBatchLoading ? "Batch Running..." : "Process Batch"}
+                    </button>
+                    <button
+                      onClick={() => handleRunProcessingBatch({ skipImageProcess: true })}
+                      disabled={processingLoading || processingBatchLoading || !processingSummary || processingSummary.pending === 0}
+                      className="rounded-lg bg-amber-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
+                    >
+                      {processingBatchLoading ? "Skip Batch..." : "Skip Batch"}
                     </button>
                   </div>
                 </div>
@@ -1866,7 +1903,7 @@ export default function App() {
                             className="h-4 w-4 rounded border border-slate-200"
                             style={{
                               backgroundColor:
-                                item.processing_background === "NO_FILL"
+                                item.processing_background === "NO_FILL" || item.processing_background === "SKIP_PROCESS"
                                   ? "transparent"
                                   : item.processing_background || backgroundColor,
                             }}
@@ -1874,6 +1911,8 @@ export default function App() {
                           <span>
                             {item.processing_background === "NO_FILL"
                               ? "No Fill"
+                              : item.processing_background === "SKIP_PROCESS"
+                                ? "Skip Process"
                               : item.processing_background || (backgroundMode === "NO_FILL" ? "No Fill" : backgroundColor)}
                           </span>
                         </div>

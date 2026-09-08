@@ -580,6 +580,13 @@ function processingOutputFilename(finalFilename, backgroundColor) {
   return `${path.basename(String(finalFilename || "output"), path.extname(String(finalFilename || "")))}${processingOutputExtension(backgroundColor)}`;
 }
 
+function processingPassthroughFilename(finalFilename, sourcePath) {
+  const sourceExtension = path.extname(String(sourcePath || "")).toLowerCase();
+  const outputExtension = PHOTO_EXTENSIONS.has(sourceExtension) ? sourceExtension : ".jpg";
+
+  return `${path.basename(String(finalFilename || "output"), path.extname(String(finalFilename || "")))}${outputExtension}`;
+}
+
 function hasSupportedProcessingOutput(filePath) {
   return /\.(jpe?g|png)$/i.test(String(filePath || ""));
 }
@@ -1754,6 +1761,7 @@ app.post("/api/sessions/:id/process", (req, res) => {
     }
 
     const limit = 1;
+    const skipImageProcess = req.body.skip_image_process === true;
     const backgroundColor = normalizeBackgroundInput(req.body.background_color);
     const storage = ensureSessionStorage(req.params.id);
     const items = db.prepare(`
@@ -1797,11 +1805,41 @@ app.post("/api/sessions/:id/process", (req, res) => {
     `).run(req.params.id);
 
     for (const item of items) {
-      const destinationPath = path.join(storage.processingDir, processingOutputFilename(item.final_filename, backgroundColor));
+      const destinationPath = path.join(
+        storage.processingDir,
+        skipImageProcess
+          ? processingPassthroughFilename(item.final_filename, item.source_path)
+          : processingOutputFilename(item.final_filename, backgroundColor)
+      );
 
       if (item.processing_status === "READY" && fs.existsSync(destinationPath)) {
         summary.skipped += 1;
         results.push({ id: item.id, status: "SKIPPED_ALREADY_DONE", processing_path: destinationPath });
+        continue;
+      }
+
+      if (skipImageProcess) {
+        if (!item.source_path || !fs.existsSync(item.source_path)) {
+          updateProcessing.run("FAILED", destinationPath, "SKIP_PROCESS", "File source foto tidak ditemukan.", item.id);
+          summary.failed += 1;
+          results.push({
+            id: item.id,
+            status: "FAILED",
+            processing_path: destinationPath,
+            message: "File source foto tidak ditemukan.",
+          });
+          continue;
+        }
+
+        fs.copyFileSync(item.source_path, destinationPath);
+        updateProcessing.run("READY", destinationPath, "SKIP_PROCESS", null, item.id);
+        summary.skipped += 1;
+        results.push({
+          id: item.id,
+          status: "SKIPPED_PROCESS_IMAGE",
+          processing_path: destinationPath,
+          background_color: "SKIP_PROCESS",
+        });
         continue;
       }
 
@@ -1848,7 +1886,7 @@ app.post("/api/sessions/:id/process", (req, res) => {
     `).run(summary.failed > 0 ? "REVIEW" : remaining > 0 ? "PROCESSING" : "READY", summary.failed, req.params.id, req.params.id);
 
     console.log(
-      `[SESSION ${req.params.id}] PROCESS_BG requested=${summary.requested} success=${summary.processed} failure=${summary.failed} duration=${Date.now() - startedAt}ms`
+      `[SESSION ${req.params.id}] PROCESS_BG mode=${skipImageProcess ? "skip" : "worker"} requested=${summary.requested} success=${summary.processed} failure=${summary.failed} skipped=${summary.skipped} duration=${Date.now() - startedAt}ms`
     );
 
     res.json({
